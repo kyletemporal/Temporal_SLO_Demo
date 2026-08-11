@@ -75,6 +75,24 @@ Docs: [`demo/docs/SLO-GUIDE.md`](demo/docs/SLO-GUIDE.md) ·
 
 ---
 
+## Serverless Workers
+
+Temporal supports running Workers on AWS Lambda (Public Preview) and GCP Cloud
+Run (Pre-release). Temporal starts the Worker when Tasks arrive, via a server
+component called the Worker Controller Instance — there is no idle polling and
+no fleet to provision.
+
+**Self-hosting it requires Temporal Service v1.31.0 or later.** The demo here
+pins **1.26.2**, so it cannot run Serverless Workers without a server upgrade.
+
+Ephemeral Workers also invalidate specific rules in this repo — `absence` alerts
+page constantly when scale-to-zero is the normal state, `task_delivery` becomes
+unreachable once cold start is in the path, and Prometheus cannot scrape a
+function that is not running. What to change is in
+[`production/docs/SERVERLESS-WORKERS.md`](production/docs/SERVERLESS-WORKERS.md).
+
+---
+
 ## Deploying the production bundle
 
 `production/` has no demo app and no `auto-setup`. 46 SLO rules + 10

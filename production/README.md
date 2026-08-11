@@ -42,7 +42,10 @@ either UI import or file provisioning.
 
 1. **`REPLACE_ME` in `alerts.yml`** — `TemporalWorkerFleetAbsent` needs a real
    namespace and task queue. Copy it once per business-critical Task Queue.
-   Delete it entirely if your Workers are serverless.
+   Delete it entirely if those Workers are Serverless Workers: scale-to-zero
+   makes absence the normal state and the rule will page continuously. See
+   [`docs/SERVERLESS-WORKERS.md`](docs/SERVERLESS-WORKERS.md), which also covers
+   the `task_delivery` SLI and why Prometheus cannot scrape Lambda.
 2. **`REPLACE_ME` in `prometheus.example.yml`** — cluster name, worker label,
    datastore exporter.
 3. **The objectives in `slo-rules.yml`.** They are placeholders. See below.
