@@ -1,0 +1,10 @@
+# Fetched from temporalio/dashboards by `make dashboards` — third-party, not ours to vendor
+demo/grafana/dashboards/community/*.json
+
+# Build artefacts
+*.tar.gz
+__pycache__/
+*.pyc
+
+# OS
+.DS_Store

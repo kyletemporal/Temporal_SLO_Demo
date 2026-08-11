@@ -1,0 +1,106 @@
+# Scrape configuration for a PRODUCTION self-hosted Temporal Service.
+#
+# The key difference from a demo: one target per SERVICE ROLE. Do not run
+# auto-setup in production — it bundles frontend, history, matching and worker
+# into a single process, which means one metrics endpoint, one failure domain,
+# and no independent scaling.
+#
+# Every dashboard and rule in this bundle filters on the `service_name` label,
+# which the server sets itself. The queries are identical whether the roles are
+# split or bundled; only this file changes.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 30s
+  external_labels:
+    cluster: REPLACE_ME        # appears on every alert; make it identify the cluster
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+  - /etc/prometheus/slo-rules.yml
+
+scrape_configs:
+  # ---------------------------------------------------------------------------
+  # Temporal Service roles.
+  #
+  # On Kubernetes, prefer kubernetes_sd_configs over static targets so pods are
+  # discovered as they move. The static form below is the shape to copy if you
+  # are on VMs.
+  # ---------------------------------------------------------------------------
+  - job_name: temporal-frontend
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["temporal-frontend:9090"]
+        labels: {group: server-metrics}
+
+  - job_name: temporal-history
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["temporal-history:9090"]
+        labels: {group: server-metrics}
+
+  - job_name: temporal-matching
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["temporal-matching:9090"]
+        labels: {group: server-metrics}
+
+  - job_name: temporal-worker
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["temporal-worker:9090"]
+        labels: {group: server-metrics}
+
+  # ---------------------------------------------------------------------------
+  # Application Worker fleet — SDK metrics.
+  #
+  # These come from YOUR code, not from Temporal. If this job is missing, the
+  # entire Worker-side half of the observability story is dark and no amount of
+  # Prometheus configuration will conjure it: the application has to export.
+  #
+  # Use service discovery, not static targets. Worker fleets scale, and a static
+  # target pins to whichever replica resolved first and silently under-reports
+  # the fleet — exactly the kind of gap that makes a dashboard lie in an
+  # incident.
+  # ---------------------------------------------------------------------------
+  - job_name: temporal-sdk-workers
+    metrics_path: /metrics
+    kubernetes_sd_configs:
+      - role: pod
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_app]
+        regex: "REPLACE_ME-worker"
+        action: keep
+      - target_label: group
+        replacement: sdk-metrics
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: pod
+
+  # ---------------------------------------------------------------------------
+  # Node-level metrics. NOT OPTIONAL, and the most commonly skipped target here.
+  #
+  # Two failure modes produce an identical Temporal signature — schedule-to-start
+  # climbing with task slots at zero — and opposite correct responses:
+  #
+  #   high Worker host CPU -> not enough Workers      -> add Workers
+  #   low  Worker host CPU -> concurrency set too low -> raise MaxConcurrent*
+  #
+  # The discriminator is host CPU, which Temporal does not emit. Without this
+  # job those two branches collapse into a coin flip, and "add more Workers"
+  # is the expensive guess that fixes nothing.
+  # ---------------------------------------------------------------------------
+  - job_name: node-exporter
+    kubernetes_sd_configs:
+      - role: node
+    relabel_configs:
+      - target_label: group
+        replacement: node-metrics
+
+  # ---------------------------------------------------------------------------
+  # Your datastore. Most self-hosted Temporal incidents are datastore incidents;
+  # persistence_latency tells you Temporal is suffering, and this tells you why.
+  # ---------------------------------------------------------------------------
+  - job_name: temporal-datastore
+    static_configs:
+      - targets: ["REPLACE_ME-db-exporter:9187"]   # postgres_exporter / cassandra exporter
+        labels: {group: datastore-metrics}

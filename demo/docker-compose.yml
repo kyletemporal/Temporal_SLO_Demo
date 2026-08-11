@@ -1,0 +1,172 @@
+name: temporal-obs-demo
+
+services:
+  # ---------------------------------------------------------------------------
+  # Persistence
+  # ---------------------------------------------------------------------------
+  postgresql:
+    image: postgres:16-alpine
+    container_name: tobs-postgres
+    environment:
+      POSTGRES_USER: temporal
+      POSTGRES_PASSWORD: temporal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporal"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [tobs]
+
+  # ---------------------------------------------------------------------------
+  # Temporal Service
+  #
+  # auto-setup runs frontend, history, matching, and worker roles in ONE
+  # container. That means a single metrics endpoint on :8000 carries all four,
+  # distinguished by the service_name label. A real deployment runs them as
+  # separate processes with separate scrape targets — the dashboard queries are
+  # identical either way, but prometheus.yml would list four targets.
+  # ---------------------------------------------------------------------------
+  temporal:
+    image: temporalio/auto-setup:1.26.2
+    container_name: tobs-temporal
+    depends_on:
+      postgresql:
+        condition: service_healthy
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_USER: temporal
+      POSTGRES_PWD: temporal
+      POSTGRES_SEEDS: postgresql
+      # Exposes the Prometheus scrape endpoint on :8000. Without this the
+      # entire "Service Health" and "Persistence" half of the dashboard is dark.
+      PROMETHEUS_ENDPOINT: 0.0.0.0:8000
+    ports:
+      - "7233:7233"   # gRPC — Frontend Service (also the health check port)
+      - "8000:8000"   # Prometheus metrics
+    healthcheck:
+      # NOT 127.0.0.1. auto-setup binds the Frontend to the container's own
+      # eth0 address (BIND_ON_IP defaults to that, not to 0.0.0.0), so nothing
+      # is listening on loopback and a health check against 127.0.0.1:7233 gets
+      # connection-refused forever. The container then never goes healthy and
+      # every service gated on `condition: service_healthy` — api, worker,
+      # temporal-ui — silently never starts.
+      test: ["CMD-SHELL", "temporal operator cluster health --address $$(hostname -i):7233"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 40s
+    networks: [tobs]
+
+  temporal-ui:
+    image: temporalio/ui:2.34.0
+    container_name: tobs-temporal-ui
+    depends_on:
+      temporal:
+        condition: service_healthy
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_CORS_ORIGINS: http://localhost:3000
+    ports:
+      - "8080:8080"
+    networks: [tobs]
+
+  # ---------------------------------------------------------------------------
+  # Demo application
+  # ---------------------------------------------------------------------------
+  api:
+    build: ./app
+    container_name: tobs-api
+    depends_on:
+      temporal:
+        condition: service_healthy
+    environment:
+      MODE: api
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_NAMESPACE: default
+      TASK_QUEUE: orders
+      HTTP_PORT: "8081"
+      METRICS_PORT: "8077"
+    ports:
+      - "8081:8081"
+    networks: [tobs]
+
+  worker:
+    build: ./app
+    depends_on:
+      temporal:
+        condition: service_healthy
+    environment:
+      MODE: worker
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_NAMESPACE: default
+      TASK_QUEUE: orders
+      METRICS_PORT: "8077"
+      # Deliberately low so slot exhaustion is reachable on a laptop.
+      # Temporal's real default is 1000 for both. Raise these to show the
+      # difference between "not enough Workers" and "Workers configured too small".
+      MAX_CONCURRENT_ACTIVITIES: "10"
+      MAX_CONCURRENT_WORKFLOW_TASKS: "10"
+    # No published ports — this service gets scaled up and down during chaos
+    # runs, and host port bindings would collide. Prometheus finds every
+    # replica through Compose DNS instead (see prometheus.yml).
+    networks: [tobs]
+
+  # ---------------------------------------------------------------------------
+  # Observability
+  # ---------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    container_name: tobs-prometheus
+    volumes:
+      - ./prometheus:/etc/prometheus:ro
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      # 15d, not the 6h this used to be. Error budgets are a question about a
+      # compliance window, and you cannot answer a 7-day question with 6 hours
+      # of data — the budget silently resets to pristine every time the
+      # retention window rolls past the incident that spent it.
+      #
+      # Still not production storage: there is no remote write and no volume
+      # mount, so `make down` erases every error budget. A real SLO stack needs
+      # durable, long-retention storage; a laptop demo with an amnesiac budget
+      # is the most common way SLO dashboards end up lying about attainment.
+      - --storage.tsdb.retention.time=15d
+      - --web.enable-lifecycle
+    ports:
+      - "9090:9090"
+    networks: [tobs]
+
+  grafana:
+    image: grafana/grafana:11.5.1
+    container_name: tobs-grafana
+    depends_on: [prometheus]
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_USERS_DEFAULT_THEME: dark
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
+    networks: [tobs]
+
+  # ---------------------------------------------------------------------------
+  # Load / chaos driver. Not started by default.
+  #   docker compose run --rm k6 run /scripts/01-backlog-storm.js
+  # ---------------------------------------------------------------------------
+  k6:
+    image: grafana/k6:0.55.0
+    profiles: [tools]
+    volumes:
+      - ./k6:/scripts:ro
+    environment:
+      API_BASE: http://api:8081
+    networks: [tobs]
+
+networks:
+  tobs:
+    driver: bridge

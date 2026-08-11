@@ -1,0 +1,71 @@
+global:
+  scrape_interval: 10s
+  evaluation_interval: 10s
+  external_labels:
+    cluster: demo
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+  # SLI recording rules, error budgets, and burn-rate alerts. Kept separate
+  # from alerts.yml because the two answer different questions: alerts.yml is
+  # "is something broken right now", slo-rules.yml is "are we still meeting
+  # what we promised, and how much room is left".
+  - /etc/prometheus/slo-rules.yml
+
+scrape_configs:
+  # ---------------------------------------------------------------------------
+  # Temporal Service (cluster) metrics
+  #
+  # auto-setup bundles frontend, history, matching, and worker roles into one
+  # process, so this single target carries all four. The service_name label
+  # separates them, which is why every cluster query in the dashboard filters
+  # on service_name rather than on job.
+  #
+  # In a real deployment, replace this with one target per role.
+  # ---------------------------------------------------------------------------
+  - job_name: temporal-service
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["temporal:8000"]
+        labels:
+          group: server-metrics
+
+  # ---------------------------------------------------------------------------
+  # Temporal SDK metrics — API process
+  # ---------------------------------------------------------------------------
+  - job_name: temporal-sdk-api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["api:8077"]
+        labels:
+          group: sdk-metrics
+          role: api
+
+  # ---------------------------------------------------------------------------
+  # Temporal SDK metrics — Worker fleet
+  #
+  # dns_sd rather than a static target because the worker service gets scaled
+  # during chaos runs (`docker compose up -d --scale worker=5`). Compose's
+  # embedded DNS returns an A record per replica, so Prometheus picks up new
+  # Workers automatically and drops them when they are scaled away.
+  #
+  # A static target would pin to whichever replica DNS resolved first and
+  # silently under-report the fleet — which is exactly the kind of gap that
+  # makes a dashboard lie during an incident.
+  # ---------------------------------------------------------------------------
+  - job_name: temporal-sdk-worker
+    metrics_path: /metrics
+    dns_sd_configs:
+      - names: ["worker"]
+        type: A
+        port: 8077
+        refresh_interval: 10s
+    relabel_configs:
+      - target_label: group
+        replacement: sdk-metrics
+      - target_label: role
+        replacement: worker
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

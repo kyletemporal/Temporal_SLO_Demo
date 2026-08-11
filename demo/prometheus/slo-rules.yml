@@ -1,0 +1,626 @@
+# =============================================================================
+# Temporal SLO definitions, error budgets, and burn-rate alerts
+# =============================================================================
+#
+# GENERATED-STYLE FILE: the per-window rules below are mechanical repetition of
+# nine SLI definitions across four rate windows. Edit the SLI list, not the
+# individual rules, or they will drift apart.
+#
+# ---------------------------------------------------------------------------
+# The model
+# ---------------------------------------------------------------------------
+# Every SLI is recorded as a BAD-EVENT RATIO: bad events / total events.
+# Availability is 1 - that. Error budget math is defined on bad events, so
+# recording the bad ratio directly keeps every downstream rule trivial.
+#
+#   slo:sli_bad:ratio_rate<window>   per-SLI bad ratio            (layer 1)
+#   slo:objective:ratio              the SLO target, e.g. 0.999   (layer 2)
+#   slo:error_budget:ratio           1 - objective                (layer 2)
+#   slo:burn_rate:ratio_rate<window> bad ratio / error budget     (layer 2)
+#   slo:error_budget_remaining:ratio 1 - consumed budget          (layer 2)
+#
+# Layer 2 is written ONCE and applies to every SLI by matching on the `sli`
+# label. Adding a new SLI means adding layer-1 rules only.
+#
+# A burn rate of 1 means you will consume exactly 100% of the error budget by
+# the end of the compliance window. A burn rate of 14.4 means you will consume
+# it in 1/14.4 of the window — about 2 hours of a 30-day budget.
+#
+# ---------------------------------------------------------------------------
+# COMPLIANCE WINDOW — read this before trusting the budget numbers
+# ---------------------------------------------------------------------------
+# This lab uses a 1 HOUR compliance window, not the 28-30 days you would use in
+# production. That is deliberate: a 10-minute chaos scenario visibly drains a
+# 1-hour budget, which is the entire teaching point. Against a 30-day budget the
+# same scenario moves the number by 0.02% and demonstrates nothing.
+#
+# To switch to production semantics:
+#   1. Add `1h`-style rules for a 28d window in the layer-1 group below.
+#   2. Repoint the `slo:compliance_window_bad:ratio` alias in layer 2 at it.
+#   3. Raise Prometheus retention past 28d (docker-compose.yml) AND give it
+#      durable storage. Six hours of retention cannot answer a 30-day question,
+#      and a restart resets your error budget to pristine — which is the single
+#      most common way SLO dashboards end up lying.
+#
+# ---------------------------------------------------------------------------
+# Objectives are PLACEHOLDERS
+# ---------------------------------------------------------------------------
+# 99.9% and 99% are round numbers, not measurements. A real SLO is derived from
+# what users need and what the system has historically delivered. Run
+# `make baseline` for a week before promoting any of these, or you will page
+# yourself for behaviour the system has always had.
+# =============================================================================
+
+groups:
+  # ==========================================================================
+  # LAYER 1 — SLI bad-event ratios, one rule per SLI per window
+  # ==========================================================================
+  - name: temporal-slo-sli
+    interval: 30s
+    rules:
+
+      # --- frontend_availability: Frontend gRPC requests that did not return an error
+      - record: slo:sli_bad:ratio_rate5m
+        expr: |
+          (
+            sum(rate(service_error_with_type{service_name="frontend",error_type!~"serviceerror_(Canceled|NotFound|NamespaceNotFound|AlreadyExist.*|InvalidArgument|FailedPrecondition|WorkflowExecutionAlreadyStarted|QueryFailed)"}[5m]))
+            or
+            sum(rate(service_requests{service_name="frontend"}[5m])) * 0
+          )
+          /
+          sum(rate(service_requests{service_name="frontend"}[5m]))
+        labels:
+          sli: frontend_availability
+      - record: slo:sli_bad:ratio_rate30m
+        expr: |
+          (
+            sum(rate(service_error_with_type{service_name="frontend",error_type!~"serviceerror_(Canceled|NotFound|NamespaceNotFound|AlreadyExist.*|InvalidArgument|FailedPrecondition|WorkflowExecutionAlreadyStarted|QueryFailed)"}[30m]))
+            or
+            sum(rate(service_requests{service_name="frontend"}[30m])) * 0
+          )
+          /
+          sum(rate(service_requests{service_name="frontend"}[30m]))
+        labels:
+          sli: frontend_availability
+      - record: slo:sli_bad:ratio_rate1h
+        expr: |
+          (
+            sum(rate(service_error_with_type{service_name="frontend",error_type!~"serviceerror_(Canceled|NotFound|NamespaceNotFound|AlreadyExist.*|InvalidArgument|FailedPrecondition|WorkflowExecutionAlreadyStarted|QueryFailed)"}[1h]))
+            or
+            sum(rate(service_requests{service_name="frontend"}[1h])) * 0
+          )
+          /
+          sum(rate(service_requests{service_name="frontend"}[1h]))
+        labels:
+          sli: frontend_availability
+      - record: slo:sli_bad:ratio_rate6h
+        expr: |
+          (
+            sum(rate(service_error_with_type{service_name="frontend",error_type!~"serviceerror_(Canceled|NotFound|NamespaceNotFound|AlreadyExist.*|InvalidArgument|FailedPrecondition|WorkflowExecutionAlreadyStarted|QueryFailed)"}[6h]))
+            or
+            sum(rate(service_requests{service_name="frontend"}[6h])) * 0
+          )
+          /
+          sum(rate(service_requests{service_name="frontend"}[6h]))
+        labels:
+          sli: frontend_availability
+
+      # --- frontend_latency: Frontend gRPC requests served in under 500ms
+      - record: slo:sli_bad:ratio_rate5m
+        expr: |
+          1 - (
+            sum(rate(service_latency_bucket{service_name="frontend",operation!~"Poll.*|GetTaskQueueUserData|ListNexusEndpoints",le="0.5"}[5m]))
+            /
+            sum(rate(service_latency_count{service_name="frontend",operation!~"Poll.*|GetTaskQueueUserData|ListNexusEndpoints"}[5m]))
+          )
+        labels:
+          sli: frontend_latency
+      - record: slo:sli_bad:ratio_rate30m
+        expr: |
+          1 - (
+            sum(rate(service_latency_bucket{service_name="frontend",operation!~"Poll.*|GetTaskQueueUserData|ListNexusEndpoints",le="0.5"}[30m]))
+            /
+            sum(rate(service_latency_count{service_name="frontend",operation!~"Poll.*|GetTaskQueueUserData|ListNexusEndpoints"}[30m]))
+          )
+        labels:
+          sli: frontend_latency
+      - record: slo:sli_bad:ratio_rate1h
+        expr: |
+          1 - (
+            sum(rate(service_latency_bucket{service_name="frontend",operation!~"Poll.*|GetTaskQueueUserData|ListNexusEndpoints",le="0.5"}[1h]))
+            /
+            sum(rate(service_latency_count{service_name="frontend",operation!~"Poll.*|GetTaskQueueUserData|ListNexusEndpoints"}[1h]))
+          )
+        labels:
+          sli: frontend_latency
+      - record: slo:sli_bad:ratio_rate6h
+        expr: |
+          1 - (
+            sum(rate(service_latency_bucket{service_name="frontend",operation!~"Poll.*|GetTaskQueueUserData|ListNexusEndpoints",le="0.5"}[6h]))
+            /
+            sum(rate(service_latency_count{service_name="frontend",operation!~"Poll.*|GetTaskQueueUserData|ListNexusEndpoints"}[6h]))
+          )
+        labels:
+          sli: frontend_latency
+
+      # --- history_availability: History service requests that did not return an error
+      - record: slo:sli_bad:ratio_rate5m
+        expr: |
+          (
+            sum(rate(service_error_with_type{service_name="history",error_type!~"serviceerror_(Canceled|NotFound|NamespaceNotFound|AlreadyExist.*|InvalidArgument|FailedPrecondition|WorkflowExecutionAlreadyStarted|QueryFailed)"}[5m]))
+            or
+            sum(rate(service_requests{service_name="history"}[5m])) * 0
+          )
+          /
+          sum(rate(service_requests{service_name="history"}[5m]))
+        labels:
+          sli: history_availability
+      - record: slo:sli_bad:ratio_rate30m
+        expr: |
+          (
+            sum(rate(service_error_with_type{service_name="history",error_type!~"serviceerror_(Canceled|NotFound|NamespaceNotFound|AlreadyExist.*|InvalidArgument|FailedPrecondition|WorkflowExecutionAlreadyStarted|QueryFailed)"}[30m]))
+            or
+            sum(rate(service_requests{service_name="history"}[30m])) * 0
+          )
+          /
+          sum(rate(service_requests{service_name="history"}[30m]))
+        labels:
+          sli: history_availability
+      - record: slo:sli_bad:ratio_rate1h
+        expr: |
+          (
+            sum(rate(service_error_with_type{service_name="history",error_type!~"serviceerror_(Canceled|NotFound|NamespaceNotFound|AlreadyExist.*|InvalidArgument|FailedPrecondition|WorkflowExecutionAlreadyStarted|QueryFailed)"}[1h]))
+            or
+            sum(rate(service_requests{service_name="history"}[1h])) * 0
+          )
+          /
+          sum(rate(service_requests{service_name="history"}[1h]))
+        labels:
+          sli: history_availability
+      - record: slo:sli_bad:ratio_rate6h
+        expr: |
+          (
+            sum(rate(service_error_with_type{service_name="history",error_type!~"serviceerror_(Canceled|NotFound|NamespaceNotFound|AlreadyExist.*|InvalidArgument|FailedPrecondition|WorkflowExecutionAlreadyStarted|QueryFailed)"}[6h]))
+            or
+            sum(rate(service_requests{service_name="history"}[6h])) * 0
+          )
+          /
+          sum(rate(service_requests{service_name="history"}[6h]))
+        labels:
+          sli: history_availability
+
+      # --- history_latency: History service requests served in under 500ms
+      - record: slo:sli_bad:ratio_rate5m
+        expr: |
+          1 - (
+            sum(rate(service_latency_bucket{service_name="history",operation!~"Poll.*|GetTaskQueueUserData|ListNexusEndpoints",le="0.5"}[5m]))
+            /
+            sum(rate(service_latency_count{service_name="history",operation!~"Poll.*|GetTaskQueueUserData|ListNexusEndpoints"}[5m]))
+          )
+        labels:
+          sli: history_latency
+      - record: slo:sli_bad:ratio_rate30m
+        expr: |
+          1 - (
+            sum(rate(service_latency_bucket{service_name="history",operation!~"Poll.*|GetTaskQueueUserData|ListNexusEndpoints",le="0.5"}[30m]))
+            /
+            sum(rate(service_latency_count{service_name="history",operation!~"Poll.*|GetTaskQueueUserData|ListNexusEndpoints"}[30m]))
+          )
+        labels:
+          sli: history_latency
+      - record: slo:sli_bad:ratio_rate1h
+        expr: |
+          1 - (
+            sum(rate(service_latency_bucket{service_name="history",operation!~"Poll.*|GetTaskQueueUserData|ListNexusEndpoints",le="0.5"}[1h]))
+            /
+            sum(rate(service_latency_count{service_name="history",operation!~"Poll.*|GetTaskQueueUserData|ListNexusEndpoints"}[1h]))
+          )
+        labels:
+          sli: history_latency
+      - record: slo:sli_bad:ratio_rate6h
+        expr: |
+          1 - (
+            sum(rate(service_latency_bucket{service_name="history",operation!~"Poll.*|GetTaskQueueUserData|ListNexusEndpoints",le="0.5"}[6h]))
+            /
+            sum(rate(service_latency_count{service_name="history",operation!~"Poll.*|GetTaskQueueUserData|ListNexusEndpoints"}[6h]))
+          )
+        labels:
+          sli: history_latency
+
+      # --- matching_availability: Matching service requests that did not return an error
+      - record: slo:sli_bad:ratio_rate5m
+        expr: |
+          (
+            sum(rate(service_error_with_type{service_name="matching",error_type!~"serviceerror_(Canceled|NotFound|NamespaceNotFound|AlreadyExist.*|InvalidArgument|FailedPrecondition|WorkflowExecutionAlreadyStarted|QueryFailed)"}[5m]))
+            or
+            sum(rate(service_requests{service_name="matching"}[5m])) * 0
+          )
+          /
+          sum(rate(service_requests{service_name="matching"}[5m]))
+        labels:
+          sli: matching_availability
+      - record: slo:sli_bad:ratio_rate30m
+        expr: |
+          (
+            sum(rate(service_error_with_type{service_name="matching",error_type!~"serviceerror_(Canceled|NotFound|NamespaceNotFound|AlreadyExist.*|InvalidArgument|FailedPrecondition|WorkflowExecutionAlreadyStarted|QueryFailed)"}[30m]))
+            or
+            sum(rate(service_requests{service_name="matching"}[30m])) * 0
+          )
+          /
+          sum(rate(service_requests{service_name="matching"}[30m]))
+        labels:
+          sli: matching_availability
+      - record: slo:sli_bad:ratio_rate1h
+        expr: |
+          (
+            sum(rate(service_error_with_type{service_name="matching",error_type!~"serviceerror_(Canceled|NotFound|NamespaceNotFound|AlreadyExist.*|InvalidArgument|FailedPrecondition|WorkflowExecutionAlreadyStarted|QueryFailed)"}[1h]))
+            or
+            sum(rate(service_requests{service_name="matching"}[1h])) * 0
+          )
+          /
+          sum(rate(service_requests{service_name="matching"}[1h]))
+        labels:
+          sli: matching_availability
+      - record: slo:sli_bad:ratio_rate6h
+        expr: |
+          (
+            sum(rate(service_error_with_type{service_name="matching",error_type!~"serviceerror_(Canceled|NotFound|NamespaceNotFound|AlreadyExist.*|InvalidArgument|FailedPrecondition|WorkflowExecutionAlreadyStarted|QueryFailed)"}[6h]))
+            or
+            sum(rate(service_requests{service_name="matching"}[6h])) * 0
+          )
+          /
+          sum(rate(service_requests{service_name="matching"}[6h]))
+        labels:
+          sli: matching_availability
+
+      # --- matching_latency: Matching service requests served in under 500ms
+      - record: slo:sli_bad:ratio_rate5m
+        expr: |
+          1 - (
+            sum(rate(service_latency_bucket{service_name="matching",operation!~"Poll.*|GetTaskQueueUserData|ListNexusEndpoints",le="0.5"}[5m]))
+            /
+            sum(rate(service_latency_count{service_name="matching",operation!~"Poll.*|GetTaskQueueUserData|ListNexusEndpoints"}[5m]))
+          )
+        labels:
+          sli: matching_latency
+      - record: slo:sli_bad:ratio_rate30m
+        expr: |
+          1 - (
+            sum(rate(service_latency_bucket{service_name="matching",operation!~"Poll.*|GetTaskQueueUserData|ListNexusEndpoints",le="0.5"}[30m]))
+            /
+            sum(rate(service_latency_count{service_name="matching",operation!~"Poll.*|GetTaskQueueUserData|ListNexusEndpoints"}[30m]))
+          )
+        labels:
+          sli: matching_latency
+      - record: slo:sli_bad:ratio_rate1h
+        expr: |
+          1 - (
+            sum(rate(service_latency_bucket{service_name="matching",operation!~"Poll.*|GetTaskQueueUserData|ListNexusEndpoints",le="0.5"}[1h]))
+            /
+            sum(rate(service_latency_count{service_name="matching",operation!~"Poll.*|GetTaskQueueUserData|ListNexusEndpoints"}[1h]))
+          )
+        labels:
+          sli: matching_latency
+      - record: slo:sli_bad:ratio_rate6h
+        expr: |
+          1 - (
+            sum(rate(service_latency_bucket{service_name="matching",operation!~"Poll.*|GetTaskQueueUserData|ListNexusEndpoints",le="0.5"}[6h]))
+            /
+            sum(rate(service_latency_count{service_name="matching",operation!~"Poll.*|GetTaskQueueUserData|ListNexusEndpoints"}[6h]))
+          )
+        labels:
+          sli: matching_latency
+
+      # --- persistence_availability: Persistence operations per service role that did not error
+      - record: slo:sli_bad:ratio_rate5m
+        expr: |
+          (
+            sum by (service_name) (rate(persistence_error_with_type{error_type!~"serviceerror_(Canceled|NotFound|NamespaceNotFound|AlreadyExist.*|InvalidArgument|FailedPrecondition|WorkflowExecutionAlreadyStarted|QueryFailed)"}[5m]))
+            or
+            sum by (service_name) (rate(persistence_requests[5m])) * 0
+          )
+          /
+          sum by (service_name) (rate(persistence_requests[5m]))
+        labels:
+          sli: persistence_availability
+      - record: slo:sli_bad:ratio_rate30m
+        expr: |
+          (
+            sum by (service_name) (rate(persistence_error_with_type{error_type!~"serviceerror_(Canceled|NotFound|NamespaceNotFound|AlreadyExist.*|InvalidArgument|FailedPrecondition|WorkflowExecutionAlreadyStarted|QueryFailed)"}[30m]))
+            or
+            sum by (service_name) (rate(persistence_requests[30m])) * 0
+          )
+          /
+          sum by (service_name) (rate(persistence_requests[30m]))
+        labels:
+          sli: persistence_availability
+      - record: slo:sli_bad:ratio_rate1h
+        expr: |
+          (
+            sum by (service_name) (rate(persistence_error_with_type{error_type!~"serviceerror_(Canceled|NotFound|NamespaceNotFound|AlreadyExist.*|InvalidArgument|FailedPrecondition|WorkflowExecutionAlreadyStarted|QueryFailed)"}[1h]))
+            or
+            sum by (service_name) (rate(persistence_requests[1h])) * 0
+          )
+          /
+          sum by (service_name) (rate(persistence_requests[1h]))
+        labels:
+          sli: persistence_availability
+      - record: slo:sli_bad:ratio_rate6h
+        expr: |
+          (
+            sum by (service_name) (rate(persistence_error_with_type{error_type!~"serviceerror_(Canceled|NotFound|NamespaceNotFound|AlreadyExist.*|InvalidArgument|FailedPrecondition|WorkflowExecutionAlreadyStarted|QueryFailed)"}[6h]))
+            or
+            sum by (service_name) (rate(persistence_requests[6h])) * 0
+          )
+          /
+          sum by (service_name) (rate(persistence_requests[6h]))
+        labels:
+          sli: persistence_availability
+
+      # --- worker_task_delivery: Activity Tasks picked up by a Worker within 200ms of scheduling
+      - record: slo:sli_bad:ratio_rate5m
+        expr: |
+          1 - (
+            sum(rate(temporal_activity_schedule_to_start_latency_seconds_bucket{le="0.2"}[5m]))
+            /
+            sum(rate(temporal_activity_schedule_to_start_latency_seconds_count[5m]))
+          )
+        labels:
+          sli: worker_task_delivery
+      - record: slo:sli_bad:ratio_rate30m
+        expr: |
+          1 - (
+            sum(rate(temporal_activity_schedule_to_start_latency_seconds_bucket{le="0.2"}[30m]))
+            /
+            sum(rate(temporal_activity_schedule_to_start_latency_seconds_count[30m]))
+          )
+        labels:
+          sli: worker_task_delivery
+      - record: slo:sli_bad:ratio_rate1h
+        expr: |
+          1 - (
+            sum(rate(temporal_activity_schedule_to_start_latency_seconds_bucket{le="0.2"}[1h]))
+            /
+            sum(rate(temporal_activity_schedule_to_start_latency_seconds_count[1h]))
+          )
+        labels:
+          sli: worker_task_delivery
+      - record: slo:sli_bad:ratio_rate6h
+        expr: |
+          1 - (
+            sum(rate(temporal_activity_schedule_to_start_latency_seconds_bucket{le="0.2"}[6h]))
+            /
+            sum(rate(temporal_activity_schedule_to_start_latency_seconds_count[6h]))
+          )
+        labels:
+          sli: worker_task_delivery
+
+      # --- workflow_completion: Workflow Executions that completed successfully (timeouts count as bad)
+      - record: slo:sli_bad:ratio_rate5m
+        expr: |
+          (
+            (sum(rate(workflow_failed[5m]))  or sum(rate(workflow_success[5m])) * 0)
+            +
+            (sum(rate(workflow_timeout[5m])) or sum(rate(workflow_success[5m])) * 0)
+          )
+          /
+          clamp_min(
+            sum(rate(workflow_success[5m]))
+            +
+            (sum(rate(workflow_failed[5m]))  or sum(rate(workflow_success[5m])) * 0)
+            +
+            (sum(rate(workflow_timeout[5m])) or sum(rate(workflow_success[5m])) * 0),
+            0.001
+          )
+        labels:
+          sli: workflow_completion
+      - record: slo:sli_bad:ratio_rate30m
+        expr: |
+          (
+            (sum(rate(workflow_failed[30m]))  or sum(rate(workflow_success[30m])) * 0)
+            +
+            (sum(rate(workflow_timeout[30m])) or sum(rate(workflow_success[30m])) * 0)
+          )
+          /
+          clamp_min(
+            sum(rate(workflow_success[30m]))
+            +
+            (sum(rate(workflow_failed[30m]))  or sum(rate(workflow_success[30m])) * 0)
+            +
+            (sum(rate(workflow_timeout[30m])) or sum(rate(workflow_success[30m])) * 0),
+            0.001
+          )
+        labels:
+          sli: workflow_completion
+      - record: slo:sli_bad:ratio_rate1h
+        expr: |
+          (
+            (sum(rate(workflow_failed[1h]))  or sum(rate(workflow_success[1h])) * 0)
+            +
+            (sum(rate(workflow_timeout[1h])) or sum(rate(workflow_success[1h])) * 0)
+          )
+          /
+          clamp_min(
+            sum(rate(workflow_success[1h]))
+            +
+            (sum(rate(workflow_failed[1h]))  or sum(rate(workflow_success[1h])) * 0)
+            +
+            (sum(rate(workflow_timeout[1h])) or sum(rate(workflow_success[1h])) * 0),
+            0.001
+          )
+        labels:
+          sli: workflow_completion
+      - record: slo:sli_bad:ratio_rate6h
+        expr: |
+          (
+            (sum(rate(workflow_failed[6h]))  or sum(rate(workflow_success[6h])) * 0)
+            +
+            (sum(rate(workflow_timeout[6h])) or sum(rate(workflow_success[6h])) * 0)
+          )
+          /
+          clamp_min(
+            sum(rate(workflow_success[6h]))
+            +
+            (sum(rate(workflow_failed[6h]))  or sum(rate(workflow_success[6h])) * 0)
+            +
+            (sum(rate(workflow_timeout[6h])) or sum(rate(workflow_success[6h])) * 0),
+            0.001
+          )
+        labels:
+          sli: workflow_completion
+
+  # ==========================================================================
+  # LAYER 2 — objectives, budgets, burn rates. Generic: matches on `sli`.
+  # ==========================================================================
+  - name: temporal-slo-meta
+    interval: 30s
+    rules:
+
+      # The objective for each SLI, as a constant series.
+      - record: slo:objective:ratio
+        expr: vector(0.999)
+        labels:
+          sli: frontend_availability
+      - record: slo:objective:ratio
+        expr: vector(0.99)
+        labels:
+          sli: frontend_latency
+      - record: slo:objective:ratio
+        expr: vector(0.999)
+        labels:
+          sli: history_availability
+      - record: slo:objective:ratio
+        expr: vector(0.99)
+        labels:
+          sli: history_latency
+      - record: slo:objective:ratio
+        expr: vector(0.999)
+        labels:
+          sli: matching_availability
+      - record: slo:objective:ratio
+        expr: vector(0.99)
+        labels:
+          sli: matching_latency
+      - record: slo:objective:ratio
+        expr: vector(0.999)
+        labels:
+          sli: persistence_availability
+      - record: slo:objective:ratio
+        expr: vector(0.9)
+        labels:
+          sli: worker_task_delivery
+      - record: slo:objective:ratio
+        expr: vector(0.99)
+        labels:
+          sli: workflow_completion
+
+      # Error budget = the fraction of bad events the objective permits.
+      - record: slo:error_budget:ratio
+        expr: 1 - slo:objective:ratio
+
+      # Alias marking which window the budget is measured over.
+      # Repoint this single rule to change the compliance window.
+      - record: slo:compliance_window_bad:ratio
+        expr: slo:sli_bad:ratio_rate1h
+
+      # Burn rate: multiples of budget-consumption pace. 1 = exactly on
+      # pace to exhaust the budget at the end of the window.
+      # group_left() because persistence_availability carries an extra
+      # service_name label that the objective series does not.
+      - record: slo:burn_rate:ratio_rate5m
+        expr: |
+          slo:sli_bad:ratio_rate5m
+            / on(sli) group_left() slo:error_budget:ratio
+      - record: slo:burn_rate:ratio_rate30m
+        expr: |
+          slo:sli_bad:ratio_rate30m
+            / on(sli) group_left() slo:error_budget:ratio
+      - record: slo:burn_rate:ratio_rate1h
+        expr: |
+          slo:sli_bad:ratio_rate1h
+            / on(sli) group_left() slo:error_budget:ratio
+      - record: slo:burn_rate:ratio_rate6h
+        expr: |
+          slo:sli_bad:ratio_rate6h
+            / on(sli) group_left() slo:error_budget:ratio
+
+      # Fraction of the error budget still unspent. Goes NEGATIVE when the
+      # SLO has been missed for the window — that is a feature, not a bug:
+      # -0.5 means you burned 150% of the budget and owes a conversation
+      # about slowing feature work.
+      - record: slo:error_budget_remaining:ratio
+        expr: |
+          1 - (
+            slo:compliance_window_bad:ratio
+              / on(sli) group_left() slo:error_budget:ratio
+          )
+
+      # Attained availability over the compliance window, for display.
+      - record: slo:sli_good:ratio
+        expr: 1 - slo:compliance_window_bad:ratio
+
+      # The objective, re-broadcast onto the FULL label set of each SLI.
+      # slo:objective:ratio carries only `sli`, but persistence_availability
+      # series also carry service_name. A dashboard table joins columns by
+      # identical labels, so mixing the two label shapes splits every
+      # persistence row in half with nulls on both sides. Multiplying the
+      # SLI by zero and adding the objective copies the value onto the
+      # wider label set.
+      - record: slo:objective_expanded:ratio
+        expr: |
+          slo:compliance_window_bad:ratio * 0
+            + on(sli) group_left() slo:objective:ratio
+
+  # ==========================================================================
+  # LAYER 3 — multi-window, multi-burn-rate alerts
+  #
+  # Two windows per alert, both of which must be breaching. The long window
+  # establishes that the burn is real; the short window establishes that it is
+  # still happening right now, so the alert resolves promptly once the incident
+  # ends instead of hanging around for the length of the long window.
+  #
+  # This replaces static threshold paging. A static "error rate > 1%" alert
+  # fires identically for a 90-second blip and a sustained outage; a burn-rate
+  # alert fires in proportion to how much of the budget the event is actually
+  # eating.
+  #
+  # 14.4x over 1h  -> 2% of a 30-day budget consumed. Page.
+  # 6x over 6h     -> 5% of a 30-day budget consumed. Page, less urgently.
+  # ==========================================================================
+  - name: temporal-slo-burn
+    rules:
+      - alert: SLOFastBurn
+        expr: |
+          (slo:burn_rate:ratio_rate1h > 14.4)
+          and
+          (slo:burn_rate:ratio_rate5m > 14.4)
+        for: 2m
+        labels:
+          severity: critical
+          component: temporal-slo
+        annotations:
+          summary: "{{ $labels.sli }} is burning error budget 14.4x too fast"
+          description: "At this rate the entire error budget for {{ $labels.sli }} is gone in a fraction of the compliance window. Sustained over 1h and still active in the last 5m."
+
+      - alert: SLOSlowBurn
+        expr: |
+          (slo:burn_rate:ratio_rate6h > 6)
+          and
+          (slo:burn_rate:ratio_rate30m > 6)
+        for: 15m
+        labels:
+          severity: warning
+          component: temporal-slo
+        annotations:
+          summary: "{{ $labels.sli }} is burning error budget 6x too fast"
+          description: "A slower burn that will still exhaust the budget well before the window ends. Investigate before it becomes a fast burn."
+
+      - alert: SLOErrorBudgetExhausted
+        expr: slo:error_budget_remaining:ratio <= 0
+        for: 5m
+        labels:
+          severity: warning
+          component: temporal-slo
+        annotations:
+          summary: "{{ $labels.sli }} has exhausted its error budget"
+          description: "The SLO has been missed across the compliance window. Under a standard error budget policy this freezes risky changes for this component until the budget recovers."

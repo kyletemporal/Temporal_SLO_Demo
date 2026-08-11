@@ -1,0 +1,16 @@
+apiVersion: 1
+
+providers:
+  - name: temporal
+    orgId: 1
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards
+      # Turns the custom/ and community/ subdirectories into Grafana folders.
+      # Deliberately a wildcard over a directory rather than a list of
+      # filenames — the temporalio/dashboards repo adds and renames files, and
+      # a hardcoded manifest would break on their next commit.
+      foldersFromFilesStructure: true

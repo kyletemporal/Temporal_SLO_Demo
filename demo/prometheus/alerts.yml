@@ -1,0 +1,234 @@
+# Starter alerting rules for a self-hosted Temporal deployment.
+# These pair 1:1 with the panels in temporal-self-hosted-overview.json.
+#
+# Tune every threshold against two weeks of your own baseline data before
+# promoting any of these to a paging severity. Shipped defaults are deliberately
+# conservative so the first version does not train anyone to ignore the alerts.
+#
+# UNIT WARNING: latency rules below assume Go/Java SDKs, where histogram values
+# are in SECONDS. For TypeScript, Python, or .NET the values are MILLISECONDS by
+# default — drop the `_seconds` from the metric name and multiply thresholds by 1000.
+
+groups:
+  - name: temporal-service-health
+    rules:
+      - alert: TemporalFrontendErrorRateHigh
+        expr: |
+          sum(rate(service_error_with_type{service_name="frontend"}[5m]))
+          /
+          clamp_min(sum(rate(service_requests{service_name="frontend"}[5m])), 1)
+          > 0.01
+        for: 10m
+        labels:
+          severity: warning
+          component: temporal-frontend
+        annotations:
+          summary: "Temporal Frontend error rate above 1%"
+          description: "Check the Frontend Errors by Type panel. ResourceExhausted points at rate limiting or an overloaded persistence layer; Internal/Unavailable points at cluster health."
+
+      # The operation exclusion is what stops this alert firing forever.
+      # This computes P95 PER OPERATION, and long-poll operations block for up
+      # to 60s by design, so their P95 is permanently above any sane threshold.
+      # Without the filter this rule fires on a completely healthy idle cluster
+      # and never clears — which is worse than having no alert, because it
+      # teaches the team that this alert means nothing.
+      - alert: TemporalFrontendLatencyHigh
+        expr: |
+          histogram_quantile(0.95,
+            sum by (operation, le) (
+              rate(service_latency_bucket{
+                service_name="frontend",
+                operation!~"Poll.*|GetTaskQueueUserData|ListNexusEndpoints"
+              }[5m])
+            )
+          ) > 1
+        for: 10m
+        labels:
+          severity: warning
+          component: temporal-frontend
+        annotations:
+          summary: "Temporal Frontend P95 latency above 1s for {{ $labels.operation }}"
+          description: "Cross-check the Persistence P95 Latency panel first — datastore latency is the most common upstream cause."
+
+      # Client-caused errors are excluded. A NotFound on a lookup for a
+      # Workflow that does not exist is the datastore working correctly; the
+      # unfiltered form fires continuously on an idle cluster.
+      - alert: TemporalPersistenceErrors
+        expr: |
+          sum(rate(persistence_error_with_type{
+            error_type!~"serviceerror_(Canceled|NotFound|NamespaceNotFound|AlreadyExist.*|InvalidArgument|FailedPrecondition)"
+          }[5m])) > 0
+        for: 5m
+        labels:
+          severity: critical
+          component: temporal-persistence
+        annotations:
+          summary: "Temporal is failing to reach its persistence store"
+          description: "Sustained persistence errors degrade every service role. Check datastore health, connection pool sizing, and network path."
+
+  - name: temporal-task-queue-health
+    rules:
+      # The trailing traffic guard is not optional. On an idle Task Queue both
+      # counters sit near zero, the ratio collapses toward 0, and this alert
+      # fires continuously on a cluster that simply has nothing to do. Sync
+      # match rate is only meaningful when Tasks are actually being matched, so
+      # the rule requires a floor of real poll traffic before it can trigger.
+      - alert: TemporalSyncMatchRateLow
+        expr: |
+          (
+            sum by (namespace) (rate(poll_success_sync[5m]))
+            /
+            clamp_min(sum by (namespace) (rate(poll_success[5m])), 1)
+            < 0.95
+          )
+          and
+          (sum by (namespace) (rate(poll_success[5m])) > 1)
+        for: 15m
+        labels:
+          severity: warning
+          component: temporal-matching
+        annotations:
+          summary: "Sync match rate below 95% in {{ $labels.namespace }}"
+          description: "Tasks are being persisted before delivery because no Worker was ready. Combined with high schedule-to-start latency this means the Worker fleet is undersized or under-resourced."
+
+      - alert: TemporalTasksWithNoPoller
+        expr: sum by (namespace) (rate(no_poller_tasks[5m])) > 0
+        for: 10m
+        labels:
+          severity: critical
+          component: temporal-matching
+        annotations:
+          summary: "Tasks queued to a Task Queue with no Workers in {{ $labels.namespace }}"
+          description: "Almost always a Task Queue name mismatch between starter and Worker, or a Worker deployment that is fully down. Work is accumulating and will not progress."
+
+  - name: temporal-worker-fleet
+    rules:
+      - alert: TemporalWorkflowTaskScheduleToStartHigh
+        expr: |
+          histogram_quantile(0.99,
+            sum by (le, namespace, task_queue) (
+              rate(temporal_workflow_task_schedule_to_start_latency_seconds_bucket[5m])
+            )
+          ) > 0.2
+        for: 10m
+        labels:
+          severity: warning
+          component: temporal-worker
+        annotations:
+          summary: "Workflow Task schedule-to-start P99 above 200ms on {{ $labels.task_queue }}"
+          description: "Workflow Tasks are queuing. Check Worker Task Slots Available and Worker host CPU before adding Workers."
+
+      - alert: TemporalActivityScheduleToStartHigh
+        expr: |
+          histogram_quantile(0.99,
+            sum by (le, namespace, task_queue) (
+              rate(temporal_activity_schedule_to_start_latency_seconds_bucket[5m])
+            )
+          ) > 0.2
+        for: 10m
+        labels:
+          severity: warning
+          component: temporal-worker
+        annotations:
+          summary: "Activity schedule-to-start P99 above 200ms on {{ $labels.task_queue }}"
+          description: "Confirm ScheduleToStartTimeout is not set in Activity Options, which skews this metric, before treating it as a capacity signal."
+
+      # NOTE the {group="sdk-metrics"} scope. Without it this rule also
+      # evaluates the Temporal Server's OWN internal workers, which emit the
+      # same metric under namespace="temporal_system" / task_queue=
+      # "default_worker_tq". Those are not your fleet and paging on them is a
+      # false positive.
+      - alert: TemporalWorkerSlotsExhausted
+        expr: min by (namespace, task_queue, worker_type) (temporal_worker_task_slots_available{group="sdk-metrics"}) == 0
+        for: 10m
+        labels:
+          severity: warning
+          component: temporal-worker
+        annotations:
+          summary: "No free task slots on {{ $labels.task_queue }} ({{ $labels.worker_type }})"
+          description: "The Worker cannot accept more Tasks. If host CPU and memory are low, this is a concurrency configuration limit rather than a capacity shortage."
+
+      # The alert that catches a Worker fleet that is GONE rather than busy.
+      #
+      # TemporalWorkerSlotsExhausted above can never catch this: when the fleet
+      # dies the series stops existing, and `== 0` on a non-existent series
+      # evaluates nothing at all. Absence has to be asserted explicitly.
+      #
+      # The scope matters more than the metric. A bare
+      # `absent(temporal_worker_task_slots_available)` — the form usually
+      # recommended, including in this lab's own runbook until it was measured —
+      # NEVER FIRES on a self-hosted cluster, because the Temporal Server runs
+      # internal Go SDK workers that keep emitting the metric under
+      # namespace="temporal_system" forever. The vector is never empty, so the
+      # alert is permanently silent while looking perfectly reasonable in code
+      # review. Verified against this stack: 22 server-emitted series remain
+      # after the entire demo Worker fleet is stopped.
+      #
+      # Scope to the namespace and Task Queue you actually own. That means one
+      # rule per business-critical Task Queue — deliberately explicit, because
+      # "some Worker somewhere is alive" is not the condition you care about.
+      - alert: TemporalWorkerFleetAbsent
+        expr: absent(temporal_worker_task_slots_available{namespace="default", task_queue="orders"})
+        for: 1m
+        labels:
+          severity: critical
+          component: temporal-worker
+        annotations:
+          summary: "No Workers polling task_queue=orders in namespace=default"
+          description: "The Worker fleet has stopped reporting entirely — deploy failure, crash loop, or node drain. Tasks are accumulating and nothing is executing them. Cross-check no_poller_tasks and sync match rate, which are cluster-side and keep reporting while Workers are down."
+
+  # ---------------------------------------------------------------------------
+  # Application-level health.
+  #
+  # Everything above measures the Temporal Service. This group measures whether
+  # your Workflows are actually succeeding, which is a different question with a
+  # different owner: these page the application team, not the platform team.
+  # ---------------------------------------------------------------------------
+  - name: temporal-application-health
+    rules:
+      # The ratio, not the raw count. A healthy Temporal application absorbs
+      # Activity failures through retries — alerting on Activity failure count
+      # guarantees false pages (Scenario 2, Phase A). A Workflow that fails is
+      # a different class of event: retries were exhausted or never configured,
+      # and the Workflow was never taught to handle the failure.
+      #
+      # The `or ... * 0` guard is load-bearing. The obvious form —
+      #   sum(rate(workflow_failed)) / sum(rate(workflow_success))
+      # — silently returns NOTHING when there are no successes, because there is
+      # no matching series on the right-hand side to divide by. That is total
+      # outage: 100% of Workflows failing produces no alert at all. The guard
+      # substitutes a zero-valued series with matching labels so the ratio
+      # resolves to 1 and the alert fires.
+      #
+      # workflow_failed / workflow_success are CLUSTER metrics from the history
+      # service, not SDK metrics, so they keep reporting even when the Worker
+      # fleet is down. Note they label the queue `taskqueue`, one word — SDK
+      # metrics use `task_queue`.
+      #
+      # Threshold caveat for the lab: Scenario 2 Phase A injects failureRate 0.6
+      # with maxAttempts 3, so ~0.6^3 = 22% of Workflows fail outright and this
+      # rule WILL fire in the phase the runbook says not to page on. Drop Phase
+      # A's failureRate to 0.3 in k6/02-failure-injection.js (~2.7% failures)
+      # for the contrast the scenario is trying to teach.
+      - alert: TemporalWorkflowFailureRatioHigh
+        expr: |
+          sum by (namespace) (rate(workflow_failed[5m]))
+          /
+          clamp_min(
+            sum by (namespace) (rate(workflow_failed[5m]))
+            +
+            (
+              sum by (namespace) (rate(workflow_success[5m]))
+              or
+              sum by (namespace) (rate(workflow_failed[5m])) * 0
+            ),
+            0.001
+          )
+          > 0.10
+        for: 2m
+        labels:
+          severity: critical
+          component: temporal-application
+        annotations:
+          summary: "Over 10% of Workflows are failing in {{ $labels.namespace }}"
+          description: "Terminal Workflow failures, not absorbed Activity failures. Check retry policies (MaximumAttempts=1 converts every Activity failure into a Workflow failure) and whether the Workflow handles the failure path at all."
