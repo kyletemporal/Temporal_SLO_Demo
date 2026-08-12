@@ -37,8 +37,29 @@ command -v python3 >/dev/null || die "python3 not found (used by verify/validate
 ok "docker $(docker version --format '{{.Server.Version}}'), compose $(docker compose version --short)"
 
 # Ports must be free, unless it is our own stack already holding them.
+#
+# lsof is absent from many Linux images, and `lsof … >/dev/null 2>&1` exits
+# non-zero when the BINARY IS MISSING exactly as it does when the port is free.
+# Without this fallback the whole loop silently passes on such a host and a real
+# conflict only surfaces later as a confusing compose error.
+port_in_use() {
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1
+  elif command -v ss >/dev/null 2>&1; then
+    ss -ltnH "sport = :$1" 2>/dev/null | grep -q .
+  elif command -v netstat >/dev/null 2>&1; then
+    netstat -an 2>/dev/null | grep -qE "[:.]$1[[:space:]].*LISTEN"
+  else
+    return 1
+  fi
+}
+if ! command -v lsof >/dev/null 2>&1 && ! command -v ss >/dev/null 2>&1 \
+   && ! command -v netstat >/dev/null 2>&1; then
+  printf "    \033[33mwarn\033[0m  no lsof/ss/netstat — skipping port check\n"
+fi
+
 for p in 3000 7233 8000 8080 8081 9090; do
-  if lsof -nP -iTCP:"$p" -sTCP:LISTEN >/dev/null 2>&1; then
+  if port_in_use "$p"; then
     holder=$(docker ps --format '{{.Names}}\t{{.Ports}}' | grep ":$p->" | cut -f1 | head -1)
     if [ -n "$holder" ]; then
       ok "port $p held by $holder (this stack)"

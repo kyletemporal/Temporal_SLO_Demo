@@ -88,14 +88,19 @@ else
   echo "$rules" | python3 -c "
 import json,sys
 d=json.load(sys.stdin)['data']['groups']
-exp={'temporal-service-health':3,'temporal-task-queue-health':2,'temporal-worker-fleet':4,
-     'temporal-application-health':1,'temporal-slo-sli':36,'temporal-slo-meta':18,
-     'temporal-slo-burn':3}
+# Group names, not exact rule counts. Counts are generated
+# (tools/generate_slo_rules.py) and legitimately change when you edit the SLI
+# list — asserting on them turns a normal edit into a confusing validator
+# failure. What actually matters is that every expected group loaded and every
+# rule evaluates.
+expected_groups=['temporal-service-health','temporal-task-queue-health',
+                 'temporal-worker-fleet','temporal-application-health',
+                 'temporal-slo-sli','temporal-slo-meta','temporal-slo-burn']
 got={g['name']:len(g['rules']) for g in d}
 rc=0
-for name,n in exp.items():
-    if got.get(name)==n: print(f'  \033[32m PASS\033[0m  {name}: {n} rules')
-    else: print(f'  \033[31m FAIL\033[0m  {name}: expected {n}, got {got.get(name,0)}'); rc=1
+for name in expected_groups:
+    if name in got: print(f'  \033[32m PASS\033[0m  {name}: {got[name]} rules')
+    else: print(f'  \033[31m FAIL\033[0m  {name}: group did not load'); rc=1
 unhealthy=[r['name'] for g in d for r in g['rules'] if r.get('health') not in ('ok','unknown')]
 if unhealthy: print(f'  \033[31m FAIL\033[0m  unhealthy rules: {unhealthy}'); rc=1
 else: print('  \033[32m PASS\033[0m  all rules healthy')
@@ -113,6 +118,30 @@ python3 - <<'PY'
 import json, glob, os, sys, urllib.parse, urllib.request
 
 PROM = os.environ.get("PROM", "http://localhost:9090")
+
+def _q(expr):
+    u = PROM + "/api/v1/query?query=" + urllib.parse.quote(expr)
+    try:
+        return json.load(urllib.request.urlopen(u, timeout=20))["data"]["result"]
+    except Exception:
+        return []
+
+# Has any Activity actually run recently?
+#
+# Several SDK histograms — schedule-to-start above all — do not EXIST until a
+# Task has been delivered. On an idle stack their panels are legitimately empty,
+# and failing on that turns "nobody has sent traffic yet" into a red validator
+# run that looks like a broken deployment. Gate on real traffic and downgrade
+# empties to warnings when there is none.
+# Presence, NOT rate(). A counter that has just come into existence has no
+# earlier sample to subtract from, so rate() over it returns 0 — which would
+# make this gate report "no traffic" immediately after the first Workflow ran.
+_r = _q('sum(temporal_activity_schedule_to_start_latency_seconds_count)')
+HAS_TRAFFIC = bool(_r) and float(_r[0]["value"][1]) > 0
+if not HAS_TRAFFIC:
+    print("\n  \033[33mNOTE\033[0m  no Activity traffic in the last 10m — panels that need")
+    print("        traffic will WARN rather than FAIL. Run 'make smoke' or")
+    print("        'make baseline', wait ~30s, and re-run for a full check.")
 
 EXPECTED_EMPTY = {
     # panel title -> why it is empty when nothing is wrong
@@ -159,6 +188,8 @@ for path in sorted(glob.glob("grafana/dashboards/*/*.json")):
                 print(f"    \033[32m PASS\033[0m  {title[:58]}")
             elif st == "EMPTY" and title in EXPECTED_EMPTY:
                 print(f"    \033[33m ----\033[0m  {title[:58]}  (empty by design: {EXPECTED_EMPTY[title]})")
+            elif st == "EMPTY" and not HAS_TRAFFIC:
+                print(f"    \033[33m WARN\033[0m  {title[:58]}  no data (no traffic yet)")
             elif st == "EMPTY":
                 print(f"    \033[31m FAIL\033[0m  {title[:58]}  returned NO DATA")
                 rc = 1

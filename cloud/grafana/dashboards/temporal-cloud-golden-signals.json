@@ -51,7 +51,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "count(slo:error_budget_remaining:ratio <= 0) or vector(0)",
+          "expr": "count(cloudslo:error_budget_remaining:ratio <= 0) or vector(0)",
           "range": false,
           "instant": true,
           "refId": "A"
@@ -116,7 +116,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "clamp_min(slo:error_budget_remaining:ratio, -1)",
+          "expr": "clamp_min(cloudslo:error_budget_remaining:ratio, -1)",
           "range": false,
           "instant": true,
           "refId": "A",
@@ -190,7 +190,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "slo:burn_rate:ratio_rate1h",
+          "expr": "cloudslo:burn_rate:ratio_rate1h",
           "range": true,
           "instant": false,
           "refId": "A",

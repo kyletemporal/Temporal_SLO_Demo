@@ -961,8 +961,8 @@
   },
   "timepicker": {},
   "timezone": "browser",
-  "title": "Temporal SLO Board \u2014 Error Budgets",
-  "uid": "temporal-slo-board",
+  "title": "Temporal SLO Board \u2014 Error Budgets (production)",
+  "uid": "temporal-slo-board-prod",
   "version": 1,
   "weekStart": ""
 }

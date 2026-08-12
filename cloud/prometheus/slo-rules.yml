@@ -26,6 +26,15 @@
 #    plus whatever your own Workers emit.
 #
 # ---------------------------------------------------------------------------
+# RECORD NAMES ARE PREFIXED `cloudslo:` ON PURPOSE
+# ---------------------------------------------------------------------------
+# The self-hosted bundle in this repo records `slo:*`. A team running BOTH a
+# self-hosted cluster and Temporal Cloud into one Prometheus would otherwise
+# get two rule sets writing the same series names with overlapping `sli`
+# labels — silently merging Cloud and self-hosted SLIs into one number. The
+# prefix keeps them separate.
+#
+# ---------------------------------------------------------------------------
 # Your availability SLI will NOT equal Temporal's SLA calculation
 # ---------------------------------------------------------------------------
 # The SLA excludes a specific list of error types (NotFound, InvalidArgument,
@@ -61,20 +70,20 @@ groups:
     rules:
 
       # --- cloud_service_availability: gRPC requests to the Namespace that did not return a service error
-      - record: slo:events_bad:rate5m
+      - record: cloudslo:events_bad:rate5m
         expr: |
           avg_over_time(temporal_cloud_v1_service_error_count[5m])
             or avg_over_time(temporal_cloud_v1_service_request_count[5m]) * 0
         labels:
           sli: cloud_service_availability
-      - record: slo:events_total:rate5m
+      - record: cloudslo:events_total:rate5m
         expr: |
           avg_over_time(temporal_cloud_v1_service_request_count[5m])
         labels:
           sli: cloud_service_availability
 
       # --- cloud_start_workflow_latency: Minutes where StartWorkflowExecution p95 stayed under 500ms
-      - record: slo:events_bad:rate5m
+      - record: cloudslo:events_bad:rate5m
         expr: |
           (
             (temporal_cloud_v1_service_latency_p95{operation="StartWorkflowExecution"} > bool 0.5)
@@ -82,14 +91,14 @@ groups:
           )
         labels:
           sli: cloud_start_workflow_latency
-      - record: slo:events_total:rate5m
+      - record: cloudslo:events_total:rate5m
         expr: |
           (temporal_cloud_v1_service_request_count{operation="StartWorkflowExecution"} > bool 0.33)
         labels:
           sli: cloud_start_workflow_latency
 
       # --- workflow_completion: Workflow Executions completing successfully; timeouts count as bad
-      - record: slo:events_bad:rate5m
+      - record: cloudslo:events_bad:rate5m
         expr: |
           (
             (avg_over_time(temporal_cloud_v1_workflow_failed_count[5m])  or avg_over_time(temporal_cloud_v1_workflow_success_count[5m]) * 0)
@@ -98,7 +107,7 @@ groups:
           )
         labels:
           sli: workflow_completion
-      - record: slo:events_total:rate5m
+      - record: cloudslo:events_total:rate5m
         expr: |
           (
             avg_over_time(temporal_cloud_v1_workflow_success_count[5m])
@@ -111,7 +120,7 @@ groups:
           sli: workflow_completion
 
       # --- activity_completion: Activity Executions completing successfully; timeouts count as bad
-      - record: slo:events_bad:rate5m
+      - record: cloudslo:events_bad:rate5m
         expr: |
           (
             (avg_over_time(temporal_cloud_v1_activity_fail_count[5m])    or avg_over_time(temporal_cloud_v1_activity_success_count[5m]) * 0)
@@ -120,7 +129,7 @@ groups:
           )
         labels:
           sli: activity_completion
-      - record: slo:events_total:rate5m
+      - record: cloudslo:events_total:rate5m
         expr: |
           (
             avg_over_time(temporal_cloud_v1_activity_success_count[5m])
@@ -133,13 +142,13 @@ groups:
           sli: activity_completion
 
       # --- task_delivery: Tasks arriving on a Task Queue that had an active poller
-      - record: slo:events_bad:rate5m
+      - record: cloudslo:events_bad:rate5m
         expr: |
           avg_over_time(temporal_cloud_v1_no_poller_tasks_count[5m])
             or avg_over_time(temporal_cloud_v1_service_request_count[5m]) * 0
         labels:
           sli: task_delivery
-      - record: slo:events_total:rate5m
+      - record: cloudslo:events_total:rate5m
         expr: |
           (
             avg_over_time(temporal_cloud_v1_no_poller_tasks_count[5m])
@@ -158,118 +167,118 @@ groups:
       # avg_over_time over the 5m recordings. Correct AND cheap: because
       # avg(rate) == events / window, dividing avg_bad by avg_total gives the
       # traffic-weighted ratio rather than an average of ratios.
-      - record: slo:sli_bad:ratio_rate5m
+      - record: cloudslo:sli_bad:ratio_rate5m
         expr: |
-          slo:events_bad:rate5m
+          cloudslo:events_bad:rate5m
           /
-          slo:events_total:rate5m
-      - record: slo:sli_bad:ratio_rate30m
+          cloudslo:events_total:rate5m
+      - record: cloudslo:sli_bad:ratio_rate30m
         expr: |
-          avg_over_time(slo:events_bad:rate5m[30m])
+          avg_over_time(cloudslo:events_bad:rate5m[30m])
           /
-          avg_over_time(slo:events_total:rate5m[30m])
-      - record: slo:sli_bad:ratio_rate1h
+          avg_over_time(cloudslo:events_total:rate5m[30m])
+      - record: cloudslo:sli_bad:ratio_rate1h
         expr: |
-          avg_over_time(slo:events_bad:rate5m[1h])
+          avg_over_time(cloudslo:events_bad:rate5m[1h])
           /
-          avg_over_time(slo:events_total:rate5m[1h])
-      - record: slo:sli_bad:ratio_rate2h
+          avg_over_time(cloudslo:events_total:rate5m[1h])
+      - record: cloudslo:sli_bad:ratio_rate2h
         expr: |
-          avg_over_time(slo:events_bad:rate5m[2h])
+          avg_over_time(cloudslo:events_bad:rate5m[2h])
           /
-          avg_over_time(slo:events_total:rate5m[2h])
-      - record: slo:sli_bad:ratio_rate6h
+          avg_over_time(cloudslo:events_total:rate5m[2h])
+      - record: cloudslo:sli_bad:ratio_rate6h
         expr: |
-          avg_over_time(slo:events_bad:rate5m[6h])
+          avg_over_time(cloudslo:events_bad:rate5m[6h])
           /
-          avg_over_time(slo:events_total:rate5m[6h])
-      - record: slo:sli_bad:ratio_rate1d
+          avg_over_time(cloudslo:events_total:rate5m[6h])
+      - record: cloudslo:sli_bad:ratio_rate1d
         expr: |
-          avg_over_time(slo:events_bad:rate5m[1d])
+          avg_over_time(cloudslo:events_bad:rate5m[1d])
           /
-          avg_over_time(slo:events_total:rate5m[1d])
-      - record: slo:sli_bad:ratio_rate3d
+          avg_over_time(cloudslo:events_total:rate5m[1d])
+      - record: cloudslo:sli_bad:ratio_rate3d
         expr: |
-          avg_over_time(slo:events_bad:rate5m[3d])
+          avg_over_time(cloudslo:events_bad:rate5m[3d])
           /
-          avg_over_time(slo:events_total:rate5m[3d])
-      - record: slo:sli_bad:ratio_rate28d
+          avg_over_time(cloudslo:events_total:rate5m[3d])
+      - record: cloudslo:sli_bad:ratio_rate28d
         expr: |
-          avg_over_time(slo:events_bad:rate5m[28d])
+          avg_over_time(cloudslo:events_bad:rate5m[28d])
           /
-          avg_over_time(slo:events_total:rate5m[28d])
+          avg_over_time(cloudslo:events_total:rate5m[28d])
 
       # Objectives. 99.9% matches the standard single-region SLA.
       # Raise cloud_service_availability to 0.9999 on an HA Namespace.
-      - record: slo:objective:ratio
+      - record: cloudslo:objective:ratio
         expr: vector(0.999)
         labels:
           sli: cloud_service_availability
-      - record: slo:objective:ratio
+      - record: cloudslo:objective:ratio
         expr: vector(0.99)
         labels:
           sli: cloud_start_workflow_latency
-      - record: slo:objective:ratio
+      - record: cloudslo:objective:ratio
         expr: vector(0.99)
         labels:
           sli: workflow_completion
-      - record: slo:objective:ratio
+      - record: cloudslo:objective:ratio
         expr: vector(0.99)
         labels:
           sli: activity_completion
-      - record: slo:objective:ratio
+      - record: cloudslo:objective:ratio
         expr: vector(0.999)
         labels:
           sli: task_delivery
 
-      - record: slo:error_budget:ratio
-        expr: 1 - slo:objective:ratio
+      - record: cloudslo:error_budget:ratio
+        expr: 1 - cloudslo:objective:ratio
 
-      - record: slo:compliance_window_bad:ratio
-        expr: slo:sli_bad:ratio_rate28d
-      - record: slo:burn_rate:ratio_rate5m
+      - record: cloudslo:compliance_window_bad:ratio
+        expr: cloudslo:sli_bad:ratio_rate28d
+      - record: cloudslo:burn_rate:ratio_rate5m
         expr: |
-          slo:sli_bad:ratio_rate5m
-            / on(sli) group_left() slo:error_budget:ratio
-      - record: slo:burn_rate:ratio_rate30m
+          cloudslo:sli_bad:ratio_rate5m
+            / on(sli) group_left() cloudslo:error_budget:ratio
+      - record: cloudslo:burn_rate:ratio_rate30m
         expr: |
-          slo:sli_bad:ratio_rate30m
-            / on(sli) group_left() slo:error_budget:ratio
-      - record: slo:burn_rate:ratio_rate1h
+          cloudslo:sli_bad:ratio_rate30m
+            / on(sli) group_left() cloudslo:error_budget:ratio
+      - record: cloudslo:burn_rate:ratio_rate1h
         expr: |
-          slo:sli_bad:ratio_rate1h
-            / on(sli) group_left() slo:error_budget:ratio
-      - record: slo:burn_rate:ratio_rate2h
+          cloudslo:sli_bad:ratio_rate1h
+            / on(sli) group_left() cloudslo:error_budget:ratio
+      - record: cloudslo:burn_rate:ratio_rate2h
         expr: |
-          slo:sli_bad:ratio_rate2h
-            / on(sli) group_left() slo:error_budget:ratio
-      - record: slo:burn_rate:ratio_rate6h
+          cloudslo:sli_bad:ratio_rate2h
+            / on(sli) group_left() cloudslo:error_budget:ratio
+      - record: cloudslo:burn_rate:ratio_rate6h
         expr: |
-          slo:sli_bad:ratio_rate6h
-            / on(sli) group_left() slo:error_budget:ratio
-      - record: slo:burn_rate:ratio_rate1d
+          cloudslo:sli_bad:ratio_rate6h
+            / on(sli) group_left() cloudslo:error_budget:ratio
+      - record: cloudslo:burn_rate:ratio_rate1d
         expr: |
-          slo:sli_bad:ratio_rate1d
-            / on(sli) group_left() slo:error_budget:ratio
-      - record: slo:burn_rate:ratio_rate3d
+          cloudslo:sli_bad:ratio_rate1d
+            / on(sli) group_left() cloudslo:error_budget:ratio
+      - record: cloudslo:burn_rate:ratio_rate3d
         expr: |
-          slo:sli_bad:ratio_rate3d
-            / on(sli) group_left() slo:error_budget:ratio
+          cloudslo:sli_bad:ratio_rate3d
+            / on(sli) group_left() cloudslo:error_budget:ratio
 
-      - record: slo:error_budget_remaining:ratio
+      - record: cloudslo:error_budget_remaining:ratio
         expr: |
           1 - (
-            slo:compliance_window_bad:ratio
-              / on(sli) group_left() slo:error_budget:ratio
+            cloudslo:compliance_window_bad:ratio
+              / on(sli) group_left() cloudslo:error_budget:ratio
           )
 
-      - record: slo:sli_good:ratio
-        expr: 1 - slo:compliance_window_bad:ratio
+      - record: cloudslo:sli_good:ratio
+        expr: 1 - cloudslo:compliance_window_bad:ratio
 
-      - record: slo:objective_expanded:ratio
+      - record: cloudslo:objective_expanded:ratio
         expr: |
-          slo:compliance_window_bad:ratio * 0
-            + on(sli) group_left() slo:objective:ratio
+          cloudslo:compliance_window_bad:ratio * 0
+            + on(sli) group_left() cloudslo:objective:ratio
 
   # ==========================================================================
   # LAYER 3 — burn-rate alerts. Identical model to the self-hosted bundle.
@@ -278,7 +287,7 @@ groups:
     rules:
       - alert: SLOFastBurn
         expr: |
-          (slo:burn_rate:ratio_rate1h > 14.4) and (slo:burn_rate:ratio_rate5m > 14.4)
+          (cloudslo:burn_rate:ratio_rate1h > 14.4) and (cloudslo:burn_rate:ratio_rate5m > 14.4)
         for: 2m
         labels: {severity: page, component: temporal-cloud-slo}
         annotations:
@@ -287,7 +296,7 @@ groups:
 
       - alert: SLOSlowBurn
         expr: |
-          (slo:burn_rate:ratio_rate6h > 6) and (slo:burn_rate:ratio_rate30m > 6)
+          (cloudslo:burn_rate:ratio_rate6h > 6) and (cloudslo:burn_rate:ratio_rate30m > 6)
         for: 15m
         labels: {severity: page, component: temporal-cloud-slo}
         annotations:
@@ -296,7 +305,7 @@ groups:
 
       - alert: SLOBudgetBurnTicket
         expr: |
-          (slo:burn_rate:ratio_rate1d > 3) and (slo:burn_rate:ratio_rate2h > 3)
+          (cloudslo:burn_rate:ratio_rate1d > 3) and (cloudslo:burn_rate:ratio_rate2h > 3)
         for: 1h
         labels: {severity: ticket, component: temporal-cloud-slo}
         annotations:
@@ -304,7 +313,7 @@ groups:
           description: "Not an emergency. Worth a ticket before it becomes one."
 
       - alert: SLOErrorBudgetExhausted
-        expr: slo:error_budget_remaining:ratio <= 0
+        expr: cloudslo:error_budget_remaining:ratio <= 0
         for: 10m
         labels: {severity: ticket, component: temporal-cloud-slo}
         annotations:

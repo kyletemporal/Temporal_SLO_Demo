@@ -74,14 +74,14 @@ P = []
 P.append(row("Service level — yours, on top of Temporal's SLA", 0))
 
 P.append(stat("SLOs in breach", {"h": 8, "w": 5, "x": 0, "y": 1},
-    [tgt("count(slo:error_budget_remaining:ratio <= 0) or vector(0)", instant=True)],
+    [tgt("count(cloudslo:error_budget_remaining:ratio <= 0) or vector(0)", instant=True)],
     "none",
     "Zero means every error budget still has room.\n\nRemember the split: cloud_service_availability is mostly Temporal's; workflow_completion, activity_completion and task_delivery are yours. Only the first is an SLA conversation.",
     thr([{"color": GOOD, "value": None}, {"color": CRITICAL, "value": 1}]),
     graph="none", text="value", cmode="background"))
 
 P.append(stat("Error budget remaining", {"h": 8, "w": 11, "x": 5, "y": 1},
-    [tgt("clamp_min(slo:error_budget_remaining:ratio, -1)",
+    [tgt("clamp_min(cloudslo:error_budget_remaining:ratio, -1)",
          legend="{{sli}} {{temporal_namespace}}", instant=True)],
     "percentunit",
     "One tile per SLO per Namespace. Saturates at -100%.\n\nRead the number, not only the colour — green vs orange is near-indistinguishable under protanopia.",
@@ -91,7 +91,7 @@ P.append(stat("Error budget remaining", {"h": 8, "w": 11, "x": 5, "y": 1},
     novalue="no traffic", minv=-1, maxv=1))
 
 P.append(ts("Burn rate (1h)", {"h": 8, "w": 8, "x": 16, "y": 1},
-    [tgt("slo:burn_rate:ratio_rate1h", legend="{{sli}} {{temporal_namespace}}")],
+    [tgt("cloudslo:burn_rate:ratio_rate1h", legend="{{sli}} {{temporal_namespace}}")],
     "none",
     "Multiples of sustainable budget spend. 14.4x is the fast-burn page threshold.\n\nIf cloud_service_availability is burning, check status.temporal.io before assuming it is yours.",
     thresholds=thr([{"color": GOOD, "value": None}, {"color": SERIOUS, "value": 1},

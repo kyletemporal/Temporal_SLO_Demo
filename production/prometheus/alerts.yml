@@ -190,15 +190,28 @@ groups:
       # IF YOUR WORKERS ARE SERVERLESS/EPHEMERAL, DELETE THIS RULE — absence is
       # normal there and this will page constantly. See docs/SERVERLESS-WORKERS.md.
       # -----------------------------------------------------------------------
-      - alert: TemporalWorkerFleetAbsent
-        expr: absent(temporal_worker_task_slots_available{namespace="REPLACE_ME", task_queue="REPLACE_ME"})
-        for: 2m
-        labels:
-          severity: page
-          component: temporal-worker
-        annotations:
-          summary: "No Workers polling REPLACE_ME"
-          description: "The Worker fleet has stopped reporting entirely — deploy failure, crash loop, or node drain. Tasks are accumulating and nothing is executing them. Cross-check no_poller_tasks, which is cluster-side and keeps reporting while Workers are down."
+      # SHIPS COMMENTED OUT ON PURPOSE. Uncomment and fill in a real namespace
+      # and task_queue — one copy per business-critical Task Queue.
+      #
+      # Why disabled by default: absent() on a selector that matches nothing
+      # returns 1. Left enabled with REPLACE_ME in it, this rule fires
+      # IMMEDIATELY AND PERMANENTLY on a perfectly healthy cluster. The fastest
+      # way to get an entire rule set muted is to page a team on day one with
+      # an alert that was never true.
+      #
+      # Do not skip it. This is the only rule here that can detect a Worker
+      # fleet that is entirely gone — a threshold cannot, because the series
+      # stops existing.
+      #
+      # - alert: TemporalWorkerFleetAbsent
+      # expr: absent(temporal_worker_task_slots_available{namespace="REPLACE_ME", task_queue="REPLACE_ME"})
+      # for: 2m
+      # labels:
+      # severity: page
+      # component: temporal-worker
+      # annotations:
+      # summary: "No Workers polling REPLACE_ME"
+      # description: "The Worker fleet has stopped reporting entirely — deploy failure, crash loop, or node drain. Tasks are accumulating and nothing is executing them. Cross-check no_poller_tasks, which is cluster-side and keeps reporting while Workers are down."
 
   # ===========================================================================
   # Application health — different owner. These page the team that writes the

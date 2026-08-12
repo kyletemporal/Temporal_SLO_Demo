@@ -2,7 +2,7 @@
 
 Observability, SLOs and error budgets for a **self-hosted** Temporal Service.
 
-Two things live here:
+Three bundles and a toolbox:
 
 | | What it is | Use it to |
 |---|---|---|
@@ -10,6 +10,12 @@ Two things live here:
 | **`production/`** | Rules and dashboards for a **self-hosted** cluster, no demo app | Drop into a real self-hosted deployment |
 | **`cloud/`** | Rules and dashboards for **Temporal Cloud**, built on the Cloud SLA | Monitor a Cloud Namespace and build SLOs on top of Temporal's |
 | **`tools/`** | Generators for the rule files and dashboards | Regenerate after editing an SLI |
+
+**Never load two of these bundles into one Prometheus.** `demo/` and
+`production/` both record `slo:*` series with overlapping `sli` labels, so
+loading both produces duplicate series and silently wrong SLO numbers. `cloud/`
+is prefixed `cloudslo:*` precisely so a team running self-hosted *and* Cloud can
+keep both in one Prometheus safely.
 
 **Self-hosted or Cloud is not a cosmetic difference.** Cloud metric `_count`
 series are gauges holding pre-computed rates (so `rate()` is wrong), percentiles

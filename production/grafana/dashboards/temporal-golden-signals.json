@@ -1372,7 +1372,7 @@
   "timepicker": {},
   "timezone": "browser",
   "title": "Temporal \u2014 Golden Signals (RED + Saturation)",
-  "uid": "temporal-golden-signals",
+  "uid": "temporal-golden-signals-prod",
   "version": 1,
   "weekStart": ""
 }

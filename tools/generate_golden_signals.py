@@ -262,7 +262,8 @@ dash = {
                              "regex": "", "skipUrlSync": False, "type": "datasource"}]},
     "time": {"from": "now-1h", "to": "now"}, "timepicker": {}, "timezone": "browser",
     "title": "Temporal — Golden Signals (RED + Saturation)",
-    "uid": "temporal-golden-signals", "version": 1, "weekStart": "",
+    "uid": ("temporal-golden-signals" if "demo/" in OUT else "temporal-golden-signals-prod"),  # PROD_UID: demo and production must not collide in one Grafana
+    "version": 1, "weekStart": "",
 }
 
 with open(OUT, "w") as f:

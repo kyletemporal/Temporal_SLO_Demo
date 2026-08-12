@@ -24,6 +24,12 @@ docs/
 
 ## Install
 
+> **Do not load this alongside `demo/` in the same Prometheus.** Both record
+> `slo:*` series with overlapping `sli` labels; together they produce duplicate
+> series and silently wrong numbers. Running this alongside `cloud/` is fine —
+> the Cloud bundle uses a `cloudslo:` prefix.
+
+
 ```bash
 # 1. Rules
 cp prometheus/slo-rules.yml prometheus/alerts.yml /etc/prometheus/

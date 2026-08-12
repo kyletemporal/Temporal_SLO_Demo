@@ -121,6 +121,15 @@ HEADER = f'''# =================================================================
 #    plus whatever your own Workers emit.
 #
 # ---------------------------------------------------------------------------
+# RECORD NAMES ARE PREFIXED `cloudslo:` ON PURPOSE
+# ---------------------------------------------------------------------------
+# The self-hosted bundle in this repo records `slo:*`. A team running BOTH a
+# self-hosted cluster and Temporal Cloud into one Prometheus would otherwise
+# get two rule sets writing the same series names with overlapping `sli`
+# labels — silently merging Cloud and self-hosted SLIs into one number. The
+# prefix keeps them separate.
+#
+# ---------------------------------------------------------------------------
 # Your availability SLI will NOT equal Temporal's SLA calculation
 # ---------------------------------------------------------------------------
 # The SLA excludes a specific list of error types (NotFound, InvalidArgument,
@@ -159,9 +168,9 @@ def emit():
     out.append("  - name: temporal-cloud-slo-events\n    interval: 60s\n    rules:\n")
     for s in SLIS:
         out.append(f"\n      # --- {s['name']}: {s['desc']}\n")
-        out.append("      - record: slo:events_bad:rate5m\n        expr: |\n")
+        out.append("      - record: cloudslo:events_bad:rate5m\n        expr: |\n")
         out.append(f"          {s['bad']}\n        labels:\n          sli: {s['name']}\n")
-        out.append("      - record: slo:events_total:rate5m\n        expr: |\n")
+        out.append("      - record: cloudslo:events_total:rate5m\n        expr: |\n")
         out.append(f"          {s['total']}\n        labels:\n          sli: {s['name']}\n")
 
     out.append("\n  # ==========================================================================\n")
@@ -172,33 +181,33 @@ def emit():
     out.append("      # avg(rate) == events / window, dividing avg_bad by avg_total gives the\n")
     out.append("      # traffic-weighted ratio rather than an average of ratios.\n")
     for w in WINDOWS:
-        out.append(f"      - record: slo:sli_bad:ratio_rate{w}\n        expr: |\n")
+        out.append(f"      - record: cloudslo:sli_bad:ratio_rate{w}\n        expr: |\n")
         if w == "5m":
-            out.append("          slo:events_bad:rate5m\n          /\n          slo:events_total:rate5m\n")
+            out.append("          cloudslo:events_bad:rate5m\n          /\n          cloudslo:events_total:rate5m\n")
         else:
-            out.append(f"          avg_over_time(slo:events_bad:rate5m[{w}])\n")
-            out.append(f"          /\n          avg_over_time(slo:events_total:rate5m[{w}])\n")
+            out.append(f"          avg_over_time(cloudslo:events_bad:rate5m[{w}])\n")
+            out.append(f"          /\n          avg_over_time(cloudslo:events_total:rate5m[{w}])\n")
 
     out.append("\n      # Objectives. 99.9% matches the standard single-region SLA.\n")
     out.append("      # Raise cloud_service_availability to 0.9999 on an HA Namespace.\n")
     for s in SLIS:
-        out.append(f"      - record: slo:objective:ratio\n        expr: vector({s['objective']})\n")
+        out.append(f"      - record: cloudslo:objective:ratio\n        expr: vector({s['objective']})\n")
         out.append(f"        labels:\n          sli: {s['name']}\n")
 
-    out.append("\n      - record: slo:error_budget:ratio\n        expr: 1 - slo:objective:ratio\n")
-    out.append("\n      - record: slo:compliance_window_bad:ratio\n")
-    out.append(f"        expr: slo:sli_bad:ratio_rate{COMPLIANCE}\n")
+    out.append("\n      - record: cloudslo:error_budget:ratio\n        expr: 1 - cloudslo:objective:ratio\n")
+    out.append("\n      - record: cloudslo:compliance_window_bad:ratio\n")
+    out.append(f"        expr: cloudslo:sli_bad:ratio_rate{COMPLIANCE}\n")
 
     for w in BURN_WINDOWS:
-        out.append(f"      - record: slo:burn_rate:ratio_rate{w}\n        expr: |\n")
-        out.append(f"          slo:sli_bad:ratio_rate{w}\n            / on(sli) group_left() slo:error_budget:ratio\n")
+        out.append(f"      - record: cloudslo:burn_rate:ratio_rate{w}\n        expr: |\n")
+        out.append(f"          cloudslo:sli_bad:ratio_rate{w}\n            / on(sli) group_left() cloudslo:error_budget:ratio\n")
 
-    out.append("\n      - record: slo:error_budget_remaining:ratio\n        expr: |\n")
-    out.append("          1 - (\n            slo:compliance_window_bad:ratio\n")
-    out.append("              / on(sli) group_left() slo:error_budget:ratio\n          )\n")
-    out.append("\n      - record: slo:sli_good:ratio\n        expr: 1 - slo:compliance_window_bad:ratio\n")
-    out.append("\n      - record: slo:objective_expanded:ratio\n        expr: |\n")
-    out.append("          slo:compliance_window_bad:ratio * 0\n            + on(sli) group_left() slo:objective:ratio\n")
+    out.append("\n      - record: cloudslo:error_budget_remaining:ratio\n        expr: |\n")
+    out.append("          1 - (\n            cloudslo:compliance_window_bad:ratio\n")
+    out.append("              / on(sli) group_left() cloudslo:error_budget:ratio\n          )\n")
+    out.append("\n      - record: cloudslo:sli_good:ratio\n        expr: 1 - cloudslo:compliance_window_bad:ratio\n")
+    out.append("\n      - record: cloudslo:objective_expanded:ratio\n        expr: |\n")
+    out.append("          cloudslo:compliance_window_bad:ratio * 0\n            + on(sli) group_left() cloudslo:objective:ratio\n")
 
     out.append(f'''
   # ==========================================================================
@@ -208,7 +217,7 @@ def emit():
     rules:
       - alert: SLOFastBurn
         expr: |
-          (slo:burn_rate:ratio_rate1h > 14.4) and (slo:burn_rate:ratio_rate5m > 14.4)
+          (cloudslo:burn_rate:ratio_rate1h > 14.4) and (cloudslo:burn_rate:ratio_rate5m > 14.4)
         for: 2m
         labels: {{severity: page, component: temporal-cloud-slo}}
         annotations:
@@ -217,7 +226,7 @@ def emit():
 
       - alert: SLOSlowBurn
         expr: |
-          (slo:burn_rate:ratio_rate6h > 6) and (slo:burn_rate:ratio_rate30m > 6)
+          (cloudslo:burn_rate:ratio_rate6h > 6) and (cloudslo:burn_rate:ratio_rate30m > 6)
         for: 15m
         labels: {{severity: page, component: temporal-cloud-slo}}
         annotations:
@@ -226,7 +235,7 @@ def emit():
 
       - alert: SLOBudgetBurnTicket
         expr: |
-          (slo:burn_rate:ratio_rate1d > 3) and (slo:burn_rate:ratio_rate2h > 3)
+          (cloudslo:burn_rate:ratio_rate1d > 3) and (cloudslo:burn_rate:ratio_rate2h > 3)
         for: 1h
         labels: {{severity: ticket, component: temporal-cloud-slo}}
         annotations:
@@ -234,7 +243,7 @@ def emit():
           description: "Not an emergency. Worth a ticket before it becomes one."
 
       - alert: SLOErrorBudgetExhausted
-        expr: slo:error_budget_remaining:ratio <= 0
+        expr: cloudslo:error_budget_remaining:ratio <= 0
         for: 10m
         labels: {{severity: ticket, component: temporal-cloud-slo}}
         annotations:

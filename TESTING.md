@@ -157,3 +157,54 @@ feedback is:
    High Availability Namespaces.
 5. Does the opt-in `temporal_activity_type` label need enabling on your scrape
    URL for the Activity latency panel to populate?
+
+---
+
+## Landmine sweep (2026-08-12)
+
+An adversarial pass over the whole repo. Six issues found and fixed; two
+documented as accepted risks.
+
+**Fixed**
+
+1. **`production/alerts.yml` paged permanently if deployed unedited.**
+   `absent()` on a selector matching nothing returns 1, so
+   `TemporalWorkerFleetAbsent` with `REPLACE_ME` still in it fired immediately
+   and forever on a healthy cluster. Now ships commented out with instructions —
+   the fastest way to get a rule set muted is to page someone on day one with an
+   alert that was never true.
+2. **`make validate` failed on an idle stack.** Schedule-to-start histograms do
+   not exist until an Activity has run, so a freshly deployed stack reported
+   four panels as broken. The validator now detects whether traffic has flowed
+   and downgrades those to WARN with instructions. Verified in three states:
+   passes with traffic (26/0), warns when idle, still FAILS on a genuinely
+   broken query.
+3. **The traffic gate initially used `rate()`** and hit the same first-sample
+   bug documented in the SLO guide — a counter that has just appeared has no
+   earlier sample, so `rate()` returned 0 and the gate reported "no traffic"
+   right after the first Workflow. Now tests presence.
+4. **Duplicate Grafana dashboard UIDs.** `demo/` and `production/` shipped
+   identical `uid` values, so provisioning both into one Grafana collides.
+   Production dashboards are now `*-prod`.
+5. **Cloud record names collided with self-hosted.** Both recorded `slo:*` with
+   overlapping `sli` labels — a team running self-hosted *and* Cloud in one
+   Prometheus would have silently merged the two into one number. Cloud is now
+   prefixed `cloudslo:*`.
+6. **`deploy.sh` port check silently skipped on Linux.** `lsof` is absent from
+   many images and `lsof … >/dev/null 2>&1` exits non-zero when the binary is
+   missing exactly as when the port is free, so the whole loop passed. Now falls
+   back to `ss`/`netstat` and warns if none exist.
+
+**Accepted, documented**
+
+- `demo/` and `production/` still share `slo:*` record names. They are
+  alternatives — you would not load both — and the READMEs now say so
+  explicitly.
+- `validate.sh` no longer asserts exact rule counts. Counts are generated and
+  change legitimately when you edit an SLI list; it now checks that every
+  expected group loaded and every rule evaluates.
+
+**Also verified clean**: no secrets or absolute paths committed, all shell and
+Python files parse, every relative markdown link resolves, `.gitignore` behaves,
+all six rule files pass `promtool`, and every generator is idempotent and
+reproduces its committed output.
