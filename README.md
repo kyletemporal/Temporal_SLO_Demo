@@ -7,8 +7,14 @@ Two things live here:
 | | What it is | Use it to |
 |---|---|---|
 | **`demo/`** | A complete stack that runs on a laptop: Temporal, Postgres, Prometheus, Grafana, a Go app, and five chaos scenarios | *See* what a backlog, a starved Worker and an orphaned Task Queue look like before you meet one at 2am |
-| **`production/`** | Just the rules and dashboards, no demo app | Drop into a real cluster |
+| **`production/`** | Rules and dashboards for a **self-hosted** cluster, no demo app | Drop into a real self-hosted deployment |
+| **`cloud/`** | Rules and dashboards for **Temporal Cloud**, built on the Cloud SLA | Monitor a Cloud Namespace and build SLOs on top of Temporal's |
 | **`tools/`** | Generators for the rule files and dashboards | Regenerate after editing an SLI |
+
+**Self-hosted or Cloud is not a cosmetic difference.** Cloud metric `_count`
+series are gauges holding pre-computed rates (so `rate()` is wrong), percentiles
+arrive pre-calculated and cannot be re-aggregated, and there are no server
+internals at all. Use `production/` or `cloud/`, not both.
 
 ---
 
@@ -119,10 +125,12 @@ dashboard are **generated**. Edit the SLI list in the generator, not the output,
 or they drift apart.
 
 ```bash
-python3 tools/generate_slo_rules.py           # demo rules
-python3 tools/generate_production_rules.py    # production rules
-python3 tools/generate_slo_board.py           # SLO board
-python3 tools/generate_golden_signals.py      # golden signals
+python3 tools/generate_slo_rules.py            # demo rules
+python3 tools/generate_production_rules.py     # self-hosted production rules
+python3 tools/generate_cloud_rules.py          # Temporal Cloud rules
+python3 tools/generate_slo_board.py            # SLO board
+python3 tools/generate_golden_signals.py       # golden signals (self-hosted)
+python3 tools/generate_cloud_golden_signals.py # golden signals (Cloud)
 ```
 
 ---

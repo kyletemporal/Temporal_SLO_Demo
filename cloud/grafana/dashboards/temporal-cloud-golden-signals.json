@@ -1,0 +1,1521 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_PROMETHEUS",
+      "label": "Prometheus",
+      "description": "",
+      "type": "datasource",
+      "pluginId": "prometheus",
+      "pluginName": "Prometheus"
+    }
+  ],
+  "annotations": {
+    "list": []
+  },
+  "description": "Four golden signals for Temporal Cloud, with SLO attainment and error budget burn. Saturation is expressed against Cloud limits.",
+  "editable": true,
+  "graphTooltip": 1,
+  "links": [],
+  "panels": [
+    {
+      "type": "row",
+      "title": "Service level \u2014 yours, on top of Temporal's SLA",
+      "collapsed": false,
+      "id": 1,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "panels": []
+    },
+    {
+      "type": "stat",
+      "title": "SLOs in breach",
+      "id": 2,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 5,
+        "x": 0,
+        "y": 1
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "count(slo:error_budget_remaining:ratio <= 0) or vector(0)",
+          "range": false,
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "description": "Zero means every error budget still has room.\n\nRemember the split: cloud_service_availability is mostly Temporal's; workflow_completion, activity_completion and task_delivery are yours. Only the first is an SLA conversation.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#0ca30c",
+                "value": null
+              },
+              {
+                "color": "#d03b3b",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "auto",
+        "wideLayout": true
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Error budget remaining",
+      "id": 3,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 11,
+        "x": 5,
+        "y": 1
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "clamp_min(slo:error_budget_remaining:ratio, -1)",
+          "range": false,
+          "instant": true,
+          "refId": "A",
+          "legendFormat": "{{sli}} {{temporal_namespace}}"
+        }
+      ],
+      "description": "One tile per SLO per Namespace. Saturates at -100%.\n\nRead the number, not only the colour \u2014 green vs orange is near-indistinguishable under protanopia.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#d03b3b",
+                "value": null
+              },
+              {
+                "color": "#ec835a",
+                "value": 0.0001
+              },
+              {
+                "color": "#0ca30c",
+                "value": 0.25
+              }
+            ]
+          },
+          "decimals": 0,
+          "noValue": "no traffic",
+          "min": -1,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "justifyMode": "auto",
+        "wideLayout": true
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Burn rate (1h)",
+      "id": 4,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 1
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "slo:burn_rate:ratio_rate1h",
+          "range": true,
+          "instant": false,
+          "refId": "A",
+          "legendFormat": "{{sli}} {{temporal_namespace}}"
+        }
+      ],
+      "description": "Multiples of sustainable budget spend. 14.4x is the fast-burn page threshold.\n\nIf cloud_service_availability is burning, check status.temporal.io before assuming it is yours.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "none",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "axisSoftMin": 0
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#0ca30c",
+                "value": null
+              },
+              {
+                "color": "#ec835a",
+                "value": 1
+              },
+              {
+                "color": "#d03b3b",
+                "value": 14.4
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "R \u2014 Rate  \u00b7  how much work is arriving",
+      "collapsed": false,
+      "id": 5,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 9
+      },
+      "panels": []
+    },
+    {
+      "type": "stat",
+      "title": "Namespace request rate",
+      "id": 6,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 5,
+        "x": 0,
+        "y": 10
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum(avg_over_time(temporal_cloud_v1_service_request_count[$__interval]))",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "description": "All gRPC requests to the Namespace. This metric is already a per-second rate \u2014 avg_over_time widens the window; rate() would be wrong.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "reqps",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#3987e5",
+                "value": null
+              }
+            ]
+          },
+          "decimals": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto",
+        "justifyMode": "auto",
+        "wideLayout": true
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Request rate by operation",
+      "id": 7,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 9,
+        "x": 5,
+        "y": 10
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "topk(6, sum by (operation) (avg_over_time(temporal_cloud_v1_service_request_count[$__interval])))",
+          "range": true,
+          "instant": false,
+          "refId": "A",
+          "legendFormat": "{{operation}}"
+        }
+      ],
+      "description": "Top 6 operations. Long-poll operations normally dominate \u2014 that is Workers waiting for work, not load.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "reqps",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "axisSoftMin": 0
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Workflow throughput",
+      "id": 8,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 10,
+        "x": 14,
+        "y": 10
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum(avg_over_time(temporal_cloud_v1_service_request_count{operation=\"StartWorkflowExecution\"}[$__interval]))",
+          "range": true,
+          "instant": false,
+          "refId": "A",
+          "legendFormat": "started"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum(avg_over_time(temporal_cloud_v1_workflow_success_count[$__interval]))",
+          "range": true,
+          "instant": false,
+          "refId": "B",
+          "legendFormat": "completed"
+        }
+      ],
+      "description": "Started vs completed. A persistent gap means work is accumulating \u2014 visible here long before anything errors.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "reqps",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "axisSoftMin": 0
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "started"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "completed"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#199e70"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "E \u2014 Errors  \u00b7  and whose fault they are",
+      "collapsed": false,
+      "id": 9,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 17
+      },
+      "panels": []
+    },
+    {
+      "type": "stat",
+      "title": "Service error ratio",
+      "id": 10,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 5,
+        "x": 0,
+        "y": 18
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "avg_over_time(temporal_cloud_v1_service_error_count[$__interval])\n/ clamp_min(avg_over_time(temporal_cloud_v1_service_request_count[$__interval]), 0.001)",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "description": "CONSERVATIVE: service_error_count has no error-type label, so SLA-excluded errors (NotFound, InvalidArgument, PermissionDenied, Throttling) are counted here and cannot be filtered out.\n\nThis reads WORSE than Temporal's own SLA figure. Do not use it to argue a service credit.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#0ca30c",
+                "value": null
+              },
+              {
+                "color": "#ec835a",
+                "value": 0.001
+              },
+              {
+                "color": "#d03b3b",
+                "value": 0.01
+              }
+            ]
+          },
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "auto",
+        "justifyMode": "auto",
+        "wideLayout": true
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Errors by operation",
+      "id": 11,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 9,
+        "x": 5,
+        "y": 18
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "topk(6, sum by (operation) (avg_over_time(temporal_cloud_v1_service_error_count[$__interval])))",
+          "range": true,
+          "instant": false,
+          "refId": "A",
+          "legendFormat": "{{operation}}"
+        }
+      ],
+      "description": "Which call is failing. A single operation dominating usually points at your code; broad elevation across operations points at Temporal \u2014 check status.temporal.io.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "reqps",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "axisSoftMin": 0
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Workflow outcomes",
+      "id": 12,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 10,
+        "x": 14,
+        "y": 18
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum(avg_over_time(temporal_cloud_v1_workflow_success_count[$__interval]))",
+          "range": true,
+          "instant": false,
+          "refId": "A",
+          "legendFormat": "success"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum(avg_over_time(temporal_cloud_v1_workflow_failed_count[$__interval]))",
+          "range": true,
+          "instant": false,
+          "refId": "B",
+          "legendFormat": "failed"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum(avg_over_time(temporal_cloud_v1_workflow_timeout_count[$__interval]))",
+          "range": true,
+          "instant": false,
+          "refId": "C",
+          "legendFormat": "timeout"
+        }
+      ],
+      "description": "Your application, not Temporal. Watch timeout specifically \u2014 a saturated Worker fleet produces timeouts rather than failures, and an alert watching only failures stays silent through it.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "reqps",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 18,
+            "showPoints": "never",
+            "spanNulls": false,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "axisSoftMin": 0
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "success"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#0ca30c"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "failed"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d03b3b"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "timeout"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#ec835a"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "D \u2014 Duration  \u00b7  pre-calculated percentiles, do not aggregate",
+      "collapsed": false,
+      "id": 13,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 25
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "StartWorkflowExecution latency",
+      "id": 14,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 0,
+        "y": 26
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "temporal_cloud_v1_service_latency_p50{operation=\"StartWorkflowExecution\"}",
+          "range": true,
+          "instant": false,
+          "refId": "A",
+          "legendFormat": "p50"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "temporal_cloud_v1_service_latency_p95{operation=\"StartWorkflowExecution\"}",
+          "range": true,
+          "instant": false,
+          "refId": "B",
+          "legendFormat": "p95"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "temporal_cloud_v1_service_latency_p99{operation=\"StartWorkflowExecution\"}",
+          "range": true,
+          "instant": false,
+          "refId": "C",
+          "legendFormat": "p99"
+        }
+      ],
+      "description": "Pre-calculated per 1-minute window. NOT aggregated across operations \u2014 Temporal's docs are explicit that aggregating a percentile produces a wrong number.\n\nOn a low-traffic Namespace p50/p95/p99 converge on the single slowest request. Tail percentiles need ~20+ samples per minute to mean anything.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "s",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "axisSoftMin": 0
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "p50"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#9ec5f4"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "p95"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#5598e7"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "p99"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#2a78d6"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Workflow schedule-to-close p95",
+      "id": 15,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 8,
+        "y": 26
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "temporal_cloud_v1_workflow_schedule_to_close_latency_p95",
+          "range": true,
+          "instant": false,
+          "refId": "A",
+          "legendFormat": "{{temporal_workflow_type}}"
+        }
+      ],
+      "description": "End-to-end Workflow duration by type. The closest thing to what your customer experiences.\n\nRising here with flat service latency means your Workers or your dependencies, not Temporal.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "s",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "axisSoftMin": 0
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Activity start-to-close p95",
+      "id": 16,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 16,
+        "y": 26
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "temporal_cloud_v1_activity_start_to_close_latency_p95",
+          "range": true,
+          "instant": false,
+          "refId": "A",
+          "legendFormat": "{{temporal_activity_type}}"
+        }
+      ],
+      "description": "How long Activities take once started. Labelled only by activity type \u2014 task queue and workflow type are deliberately excluded upstream because pre-calculated percentiles cannot be split further.\n\nRequires the opt-in temporal_activity_type label on your scrape URL.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "s",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "axisSoftMin": 0
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "S \u2014 Saturation  \u00b7  on Cloud this means LIMITS",
+      "collapsed": false,
+      "id": 17,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 33
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Usage against limits",
+      "id": 18,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 34
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "temporal_cloud_v1_total_action_count / clamp_min(temporal_cloud_v1_action_limit, 1)",
+          "range": true,
+          "instant": false,
+          "refId": "A",
+          "legendFormat": "actions"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "temporal_cloud_v1_service_request_count / clamp_min(temporal_cloud_v1_service_request_limit, 1)",
+          "range": true,
+          "instant": false,
+          "refId": "B",
+          "legendFormat": "requests"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "temporal_cloud_v1_service_pending_requests / clamp_min(temporal_cloud_v1_poller_limit, 1)",
+          "range": true,
+          "instant": false,
+          "refId": "C",
+          "legendFormat": "pollers"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "temporal_cloud_v1_operations_count / clamp_min(temporal_cloud_v1_operations_limit, 1)",
+          "range": true,
+          "instant": false,
+          "refId": "D",
+          "legendFormat": "operations"
+        }
+      ],
+      "description": "The saturation signal that has no self-hosted equivalent, and the one that surprises teams migrating to Cloud.\n\nAlert on the RATIO so it survives a limit increase. Hitting a limit looks like an outage to your users while sitting inside Temporal's SLA \u2014 Throttling is explicitly excluded from it.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "percentunit",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "axisSoftMin": 0
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#0ca30c",
+                "value": null
+              },
+              {
+                "color": "#ec835a",
+                "value": 0.8
+              },
+              {
+                "color": "#d03b3b",
+                "value": 1.0
+              }
+            ]
+          },
+          "decimals": 2,
+          "min": 0,
+          "max": 1.2
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "actions"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "requests"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d95926"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "pollers"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#199e70"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "operations"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#c98500"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Throttling",
+      "id": 19,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 34
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum(avg_over_time(temporal_cloud_v1_total_action_throttled_count[$__interval]))",
+          "range": true,
+          "instant": false,
+          "refId": "A",
+          "legendFormat": "actions"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum(avg_over_time(temporal_cloud_v1_operations_throttled_count[$__interval]))",
+          "range": true,
+          "instant": false,
+          "refId": "B",
+          "legendFormat": "operations"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum(avg_over_time(temporal_cloud_v1_service_request_throttled_count[$__interval]))",
+          "range": true,
+          "instant": false,
+          "refId": "C",
+          "legendFormat": "requests"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum(avg_over_time(temporal_cloud_v1_resource_exhausted_error_count[$__interval]))",
+          "range": true,
+          "instant": false,
+          "refId": "D",
+          "legendFormat": "resource exhausted"
+        }
+      ],
+      "description": "The moment your users start feeling a limit. Anything above zero is real.\n\nThis can be non-zero while the usage ratios look fine: metrics are per-second rates averaged over a minute, so a sub-minute burst throttles without moving the average. If they disagree, believe this panel.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "reqps",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 18,
+            "showPoints": "never",
+            "spanNulls": false,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "axisSoftMin": 0
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#0ca30c",
+                "value": null
+              },
+              {
+                "color": "#d03b3b",
+                "value": 0.0001
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "actions"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#ec835a"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "operations"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#c98500"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "requests"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d03b3b"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "resource exhausted"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d55181"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Task Queue backlog",
+      "id": 20,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 34
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "topk(6, temporal_cloud_v1_approximate_backlog_count)",
+          "range": true,
+          "instant": false,
+          "refId": "A",
+          "legendFormat": "{{temporal_task_queue}} / {{task_type}}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum(avg_over_time(temporal_cloud_v1_no_poller_tasks_count[$__interval]))",
+          "range": true,
+          "instant": false,
+          "refId": "B",
+          "legendFormat": "tasks with NO poller"
+        }
+      ],
+      "description": "Backlog is a VALUE (current depth), not a rate \u2014 a large but draining backlog is fine, a growing one is not.\n\n'tasks with no poller' is the signal with no false-positive mode: work is arriving on a queue nobody polls. On Cloud that is always yours \u2014 a Task Queue name mismatch or a Worker fleet that is down.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "short",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "axisSoftMin": 0
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "tasks with NO poller"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d03b3b"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    }
+  ],
+  "preload": false,
+  "refresh": "1m",
+  "schemaVersion": 39,
+  "tags": [
+    "temporal",
+    "temporal-cloud",
+    "golden-signals",
+    "sre",
+    "slo"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {},
+        "hide": 0,
+        "includeAll": false,
+        "label": "Data source",
+        "multi": false,
+        "name": "DS_PROMETHEUS",
+        "options": [],
+        "query": "prometheus",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "type": "datasource"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Temporal Cloud \u2014 Golden Signals (RED + Saturation)",
+  "uid": "temporal-cloud-golden-signals",
+  "version": 1,
+  "weekStart": ""
+}

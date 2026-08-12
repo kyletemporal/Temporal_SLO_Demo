@@ -1,0 +1,214 @@
+# =============================================================================
+# Temporal Cloud — operational alerts
+# =============================================================================
+#
+# slo-rules.yml answers "are we keeping the promise". This answers "is
+# something broken right now". Run both.
+#
+# REMINDER: every `_count` metric here is a GAUGE holding a pre-computed
+# per-second rate. Do not add rate() to any of these expressions.
+# =============================================================================
+
+groups:
+  # ===========================================================================
+  # Is Temporal healthy?
+  # ===========================================================================
+  - name: temporal-cloud-service
+    rules:
+      - alert: TemporalCloudErrorRateHigh
+        # Conservative by necessity: service_error_count has no error-type
+        # label, so SLA-excluded errors (NotFound, InvalidArgument, Throttling)
+        # are counted here and cannot be filtered out. This will read worse
+        # than Temporal's own SLA figure. See docs/SLA-AND-SLOS.md.
+        expr: |
+          avg_over_time(temporal_cloud_v1_service_error_count[5m])
+          /
+          clamp_min(avg_over_time(temporal_cloud_v1_service_request_count[5m]), 0.001)
+          > 0.01
+        for: 10m
+        labels:
+          severity: page
+          component: temporal-cloud
+        annotations:
+          summary: "Temporal Cloud error rate above 1% in {{ $labels.temporal_namespace }}"
+          description: "Check https://status.temporal.io first. If the status page is clean, look at your own error types — caller-caused errors land in this metric too and are usually a deploy."
+
+      - alert: TemporalCloudResourceExhausted
+        # A single resource receiving a burst larger than it can absorb. SDKs
+        # retry these gracefully, so a brief spike is survivable — sustained
+        # values are not.
+        expr: avg_over_time(temporal_cloud_v1_resource_exhausted_error_count[5m]) > 0
+        for: 10m
+        labels:
+          severity: ticket
+          component: temporal-cloud
+        annotations:
+          summary: "Resource exhaustion in {{ $labels.temporal_namespace }} ({{ $labels.operation }})"
+          description: "Sustained resource exhaustion. Look at request distribution and whether one Task Queue or Workflow type is producing a hot spot."
+
+      - alert: TemporalCloudStartLatencyHigh
+        # Gated on traffic. Percentiles are computed per 1-minute window, so a
+        # near-idle Namespace has p95 == its single slowest request. Without
+        # the gate this pages on statistical noise.
+        expr: |
+          (temporal_cloud_v1_service_latency_p95{operation="StartWorkflowExecution"} > 1)
+          and
+          (temporal_cloud_v1_service_request_count{operation="StartWorkflowExecution"} > 0.33)
+        for: 10m
+        labels:
+          severity: ticket
+          component: temporal-cloud
+        annotations:
+          summary: "StartWorkflowExecution p95 above 1s in {{ $labels.temporal_namespace }}"
+          description: "Check throttling metrics before latency: being rate-limited presents as latency. Never aggregate this percentile across Namespaces or operations — the result is not a percentile."
+
+  # ===========================================================================
+  # Are we hitting Cloud limits?
+  #
+  # This category has no self-hosted equivalent, and it is the one that most
+  # often surprises teams migrating to Cloud. Throttling looks like an outage
+  # to your users while sitting comfortably inside Temporal's SLA — Throttling
+  # is on the SLA's exclusion list.
+  #
+  # Alert on the RATIO so the alert survives a limit increase.
+  # ===========================================================================
+  - name: temporal-cloud-limits
+    rules:
+      - alert: TemporalCloudActionsNearLimit
+        expr: |
+          temporal_cloud_v1_total_action_count
+          / clamp_min(temporal_cloud_v1_action_limit, 1)
+          > 0.8
+        for: 15m
+        labels:
+          severity: ticket
+          component: temporal-cloud-limits
+        annotations:
+          summary: "Action rate above 80% of limit in {{ $labels.temporal_namespace }}"
+          description: "Approaching the Namespace action limit. Raise the limit or shed load before throttling starts."
+
+      - alert: TemporalCloudRequestsNearLimit
+        expr: |
+          temporal_cloud_v1_service_request_count
+          / clamp_min(temporal_cloud_v1_service_request_limit, 1)
+          > 0.8
+        for: 15m
+        labels:
+          severity: ticket
+          component: temporal-cloud-limits
+        annotations:
+          summary: "Request rate above 80% of limit in {{ $labels.temporal_namespace }}"
+
+      - alert: TemporalCloudPollersNearLimit
+        # Pending requests are active long-pollers. Hitting the poller limit
+        # stops Workers connecting, which presents as a backlog with no obvious
+        # cause.
+        expr: |
+          temporal_cloud_v1_service_pending_requests
+          / clamp_min(temporal_cloud_v1_poller_limit, 1)
+          > 0.8
+        for: 15m
+        labels:
+          severity: ticket
+          component: temporal-cloud-limits
+        annotations:
+          summary: "Poller count above 80% of limit in {{ $labels.temporal_namespace }}"
+          description: "Too many Workers or too many pollers each. Further Workers will not connect."
+
+      - alert: TemporalCloudThrottling
+        # The moment users start feeling it. Note this can fire while the usage
+        # ratios above look fine: metrics are per-second rates averaged over a
+        # minute, so a sub-minute burst throttles without moving the average.
+        # If these disagree, believe this one.
+        expr: |
+          (
+            avg_over_time(temporal_cloud_v1_total_action_throttled_count[5m])
+            + avg_over_time(temporal_cloud_v1_operations_throttled_count[5m])
+            + avg_over_time(temporal_cloud_v1_service_request_throttled_count[5m])
+          ) > 0
+        for: 5m
+        labels:
+          severity: page
+          component: temporal-cloud-limits
+        annotations:
+          summary: "Temporal Cloud is throttling {{ $labels.temporal_namespace }}"
+          description: "Requests are being rejected against your limits. This is NOT covered by the SLA — Throttling is explicitly excluded. Raise limits or reduce load."
+
+  # ===========================================================================
+  # Is YOUR side healthy? Cloud cannot poll a Task Queue for you.
+  # ===========================================================================
+  - name: temporal-cloud-workers
+    rules:
+      - alert: TemporalCloudTasksWithNoPoller
+        # The Cloud equivalent of no_poller_tasks. Still the signal with no
+        # false-positive mode: work is arriving on a queue nobody is polling.
+        # On Cloud this is always yours — a Task Queue name mismatch or a
+        # Worker deployment that is down.
+        expr: avg_over_time(temporal_cloud_v1_no_poller_tasks_count[5m]) > 0
+        for: 10m
+        labels:
+          severity: page
+          component: temporal-worker
+        annotations:
+          summary: "Tasks with no poller in {{ $labels.temporal_namespace }}/{{ $labels.temporal_task_queue }}"
+          description: "Nothing is failing and nothing is progressing. Task Queue name mismatch, or your Worker fleet is down. Temporal cannot fix this for you."
+
+      - alert: TemporalCloudBacklogGrowing
+        # approximate_backlog_count is a VALUE, not a rate — the current depth.
+        # deriv() over it asks whether the queue is growing, which is the
+        # question. A large but stable backlog that is draining is fine.
+        expr: |
+          (temporal_cloud_v1_approximate_backlog_count > 1000)
+          and
+          (deriv(temporal_cloud_v1_approximate_backlog_count[15m]) > 0)
+        for: 15m
+        labels:
+          severity: ticket
+          component: temporal-worker
+        annotations:
+          summary: "Task Queue backlog growing in {{ $labels.temporal_namespace }}/{{ $labels.temporal_task_queue }}"
+          description: "Backlog above 1000 and still rising over 15m. Your Workers are not keeping up. Check Worker slot utilisation and host CPU — Cloud metrics cannot tell you which."
+
+      - alert: TemporalCloudWorkflowFailureRatioHigh
+        # Timeouts counted as bad: a saturated Worker fleet produces timeouts,
+        # not failures. The `or ... * 0` guard means a Namespace with failures
+        # but zero successes still produces a series — without it, total
+        # outage yields no alert.
+        expr: |
+          (
+            (avg_over_time(temporal_cloud_v1_workflow_failed_count[5m])  or avg_over_time(temporal_cloud_v1_workflow_success_count[5m]) * 0)
+            +
+            (avg_over_time(temporal_cloud_v1_workflow_timeout_count[5m]) or avg_over_time(temporal_cloud_v1_workflow_success_count[5m]) * 0)
+          )
+          /
+          clamp_min(
+            avg_over_time(temporal_cloud_v1_workflow_success_count[5m])
+            + (avg_over_time(temporal_cloud_v1_workflow_failed_count[5m])  or avg_over_time(temporal_cloud_v1_workflow_success_count[5m]) * 0)
+            + (avg_over_time(temporal_cloud_v1_workflow_timeout_count[5m]) or avg_over_time(temporal_cloud_v1_workflow_success_count[5m]) * 0),
+            0.001
+          )
+          > 0.05
+        for: 10m
+        labels:
+          severity: page
+          component: temporal-application
+        annotations:
+          summary: "Over 5% of Workflows failing or timing out in {{ $labels.temporal_namespace }}"
+          description: "Your application, not Temporal. Check retry policies and whether Workflows handle their failure paths. A spike in timeouts specifically usually means Worker saturation rather than bugs."
+
+  # ===========================================================================
+  # High Availability Namespaces only
+  # ===========================================================================
+  - name: temporal-cloud-ha
+    rules:
+      - alert: TemporalCloudReplicationLagHigh
+        # Only emitted for HA Namespaces. Replication lag is your data-loss
+        # window if a failover happens right now.
+        expr: temporal_cloud_v1_replication_lag_p99 > 60
+        for: 15m
+        labels:
+          severity: ticket
+          component: temporal-cloud-ha
+        annotations:
+          summary: "Replication lag p99 above 60s in {{ $labels.temporal_namespace }}"
+          description: "On failover, roughly this much recent progress is at risk of replay. Raise with Temporal support if it stays elevated."

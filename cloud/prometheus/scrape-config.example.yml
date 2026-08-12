@@ -1,0 +1,86 @@
+# Scraping the Temporal Cloud OpenMetrics endpoint.
+#
+# Four settings here are NOT optional. Getting any of them wrong produces a
+# dashboard that looks fine and is quietly wrong.
+
+global:
+  scrape_interval: 30s
+  evaluation_interval: 60s
+
+rule_files:
+  - /etc/prometheus/slo-rules.yml
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  # ---------------------------------------------------------------------------
+  # Temporal Cloud — Namespace metrics
+  # ---------------------------------------------------------------------------
+  - job_name: temporal-cloud
+    scheme: https
+    metrics_path: /v1/metrics
+
+    # (1) HONOR TIMESTAMPS. The endpoint deliberately serves data offset ~3
+    #     minutes into the past, with each sample carrying its true timestamp.
+    #     Without this, Prometheus stamps everything with scrape time and every
+    #     series is shifted forward by minutes — your incident appears to start
+    #     three minutes after it did, and correlation with your own Worker
+    #     metrics silently breaks.
+    honor_timestamps: true
+
+    # (2) 30s SCRAPE INTERVAL. Metrics update once per minute. Intervals longer
+    #     than 60s skip datapoints outright; each scrape returns only the most
+    #     recently completed 1-minute window, so a missed scrape is data you
+    #     never get back.
+    scrape_interval: 30s
+
+    # (3) GENEROUS TIMEOUT. Responses get large with many Namespaces.
+    scrape_timeout: 10s
+
+    static_configs:
+      - targets: ["metrics.temporal.io"]
+
+    # (4) AUTHENTICATION. API key from a Service Account with the
+    #     "Metrics Read-Only" account role (Cloud UI -> Settings ->
+    #     Service Accounts). The key inherits that account's permissions.
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/temporal-cloud-api-key
+
+    params:
+      # Filter server-side to keep the response small. Wildcards supported.
+      namespaces: ["REPLACE_ME-prod-*"]
+
+      # Opt-in high-cardinality labels. OFF by default; enable deliberately.
+      #   temporal_activity_type          — on Activity metrics
+      #   temporal_worker_deployment_name — on approximate_backlog_count
+      #   temporal_worker_build_id        — on approximate_backlog_count
+      # labels: ["temporal_activity_type"]
+
+  # ---------------------------------------------------------------------------
+  # YOUR Workers. Temporal Cloud has no visibility into these, and they are the
+  # half of the system you actually operate.
+  #
+  # Everything on the Cloud endpoint stops at the Namespace boundary: it can
+  # tell you Tasks are backing up, but not that your Worker pods are CPU-starved
+  # or that a slot supplier is misconfigured. Without this job you are
+  # monitoring your provider, not your service.
+  # ---------------------------------------------------------------------------
+  - job_name: temporal-sdk-workers
+    metrics_path: /metrics
+    kubernetes_sd_configs:
+      - role: pod
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_app]
+        regex: "REPLACE_ME-worker"
+        action: keep
+      - target_label: group
+        replacement: sdk-metrics
+
+  # ---------------------------------------------------------------------------
+  # Worker host metrics. Same reasoning as self-hosted: schedule-to-start
+  # climbing with slots at zero means "add Workers" when host CPU is high and
+  # "raise MaxConcurrent*" when it is low. Cloud cannot tell you which.
+  # ---------------------------------------------------------------------------
+  - job_name: node-exporter
+    kubernetes_sd_configs:
+      - role: node

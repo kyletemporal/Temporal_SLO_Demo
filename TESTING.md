@@ -130,3 +130,30 @@ Most valuable, roughly in order:
    the objectives, and they are the part meant to be copied into real clusters
 4. Objectives that are obviously wrong for your hardware
 5. Anything in the docs that is confidently stated and false
+
+---
+
+## `cloud/` — unvalidated against a live account
+
+The Cloud bundle was built from Temporal's published SLA and OpenMetrics
+reference. It has **never been pointed at a real Temporal Cloud Namespace.**
+
+Verified: `promtool check rules` passes on both files (39 + 11 rules), every
+PromQL expression in the rules and the dashboard parses against a real
+Prometheus, the dashboard has zero layout overlaps, and no expression applies
+`rate()` to a Cloud counter (which would be wrong — they are gauges holding
+pre-computed rates).
+
+Not verified: any actual value. If you have a Cloud account, the highest-value
+feedback is:
+
+1. Do the metric names and labels match what your endpoint actually serves?
+2. Does `cloud_service_availability` produce a plausible number, and how far is
+   it from the figure Temporal reports? It should read *worse* — the metric has
+   no error-type label, so SLA-excluded errors cannot be filtered out.
+3. Do the limit gauges (`temporal_cloud_v1_action_limit` and friends) appear for
+   your plan? The saturation panels and three alerts depend on them.
+4. Is `temporal_cloud_v1_replication_lag_p99` present? It should exist only on
+   High Availability Namespaces.
+5. Does the opt-in `temporal_activity_type` label need enabling on your scrape
+   URL for the Activity latency panel to populate?

@@ -1,0 +1,312 @@
+# =============================================================================
+# Temporal CLOUD — SLOs, error budgets and burn-rate alerts
+# =============================================================================
+#
+# Compliance window: 28d. Per-Namespace.
+#
+# ---------------------------------------------------------------------------
+# READ THIS FIRST: Cloud metrics are NOT self-hosted metrics
+# ---------------------------------------------------------------------------
+# Three differences make most self-hosted PromQL wrong here.
+#
+# 1. RATES ARE PRE-COMPUTED. Every `_count` metric from the OpenMetrics
+#    endpoint is a GAUGE holding a per-second rate, already aggregated over a
+#    1-minute window. Do NOT wrap them in rate() or increase(). rate() of a
+#    gauge is meaningless and will silently produce near-zero numbers that look
+#    plausible. Use avg_over_time() to widen the window, as this file does.
+#
+# 2. PERCENTILES ARE PRE-CALCULATED AND CANNOT BE RE-AGGREGATED. There are no
+#    histogram buckets, so histogram_quantile() does not apply. Temporal's docs
+#    are explicit that aggregating `_p95` across dimensions produces a wrong
+#    number. Nor can you widen a 1-minute p95 into an accurate 1-hour p95.
+#
+# 3. THERE ARE NO SERVER INTERNALS. You do not run frontend, history, matching
+#    or the datastore, so there is no persistence_latency, no shard metrics and
+#    no service_name label. What you get is the Namespace's external behaviour
+#    plus whatever your own Workers emit.
+#
+# ---------------------------------------------------------------------------
+# Your availability SLI will NOT equal Temporal's SLA calculation
+# ---------------------------------------------------------------------------
+# The SLA excludes a specific list of error types (NotFound, InvalidArgument,
+# PermissionDenied, Throttling, WorkflowExecutionAlreadyStarted, and others -
+# see docs/SLA-AND-SLOS.md). But `temporal_cloud_v1_service_error_count` is
+# labelled only by `operation`. There is NO error-type dimension, so those
+# exclusions CANNOT be applied to the metric.
+#
+# Consequence: the availability SLI below is a CONSERVATIVE SUPERSET. It counts
+# errors the SLA forgives, so it will read lower than Temporal's own figure.
+# That is fine for running your service — you want to know about caller errors
+# too — but do not use this number to argue a service credit. Temporal's
+# calculation is authoritative for the SLA.
+#
+# ---------------------------------------------------------------------------
+# Do not promise more than Temporal promises you
+# ---------------------------------------------------------------------------
+# The contractual SLA is 99.9% on a standard single-region Namespace, and
+# 99.99% on a High Availability Namespace. Any availability SLO you offer your
+# own customers inherits that ceiling for everything Temporal owns. Promising
+# 99.99% on a standard Namespace is promising something you have not bought.
+#
+# The default objective below is 99.9% to match the standard SLA. On an HA
+# Namespace you may raise it to 99.99%.
+# =============================================================================
+
+groups:
+  # ==========================================================================
+  # LAYER 1 — event rates. Two rules per SLI.
+  # ==========================================================================
+  - name: temporal-cloud-slo-events
+    interval: 60s
+    rules:
+
+      # --- cloud_service_availability: gRPC requests to the Namespace that did not return a service error
+      - record: slo:events_bad:rate5m
+        expr: |
+          avg_over_time(temporal_cloud_v1_service_error_count[5m])
+            or avg_over_time(temporal_cloud_v1_service_request_count[5m]) * 0
+        labels:
+          sli: cloud_service_availability
+      - record: slo:events_total:rate5m
+        expr: |
+          avg_over_time(temporal_cloud_v1_service_request_count[5m])
+        labels:
+          sli: cloud_service_availability
+
+      # --- cloud_start_workflow_latency: Minutes where StartWorkflowExecution p95 stayed under 500ms
+      - record: slo:events_bad:rate5m
+        expr: |
+          (
+            (temporal_cloud_v1_service_latency_p95{operation="StartWorkflowExecution"} > bool 0.5)
+            and (temporal_cloud_v1_service_request_count{operation="StartWorkflowExecution"} > 0.33)
+          )
+        labels:
+          sli: cloud_start_workflow_latency
+      - record: slo:events_total:rate5m
+        expr: |
+          (temporal_cloud_v1_service_request_count{operation="StartWorkflowExecution"} > bool 0.33)
+        labels:
+          sli: cloud_start_workflow_latency
+
+      # --- workflow_completion: Workflow Executions completing successfully; timeouts count as bad
+      - record: slo:events_bad:rate5m
+        expr: |
+          (
+            (avg_over_time(temporal_cloud_v1_workflow_failed_count[5m])  or avg_over_time(temporal_cloud_v1_workflow_success_count[5m]) * 0)
+            +
+            (avg_over_time(temporal_cloud_v1_workflow_timeout_count[5m]) or avg_over_time(temporal_cloud_v1_workflow_success_count[5m]) * 0)
+          )
+        labels:
+          sli: workflow_completion
+      - record: slo:events_total:rate5m
+        expr: |
+          (
+            avg_over_time(temporal_cloud_v1_workflow_success_count[5m])
+            +
+            (avg_over_time(temporal_cloud_v1_workflow_failed_count[5m])  or avg_over_time(temporal_cloud_v1_workflow_success_count[5m]) * 0)
+            +
+            (avg_over_time(temporal_cloud_v1_workflow_timeout_count[5m]) or avg_over_time(temporal_cloud_v1_workflow_success_count[5m]) * 0)
+          )
+        labels:
+          sli: workflow_completion
+
+      # --- activity_completion: Activity Executions completing successfully; timeouts count as bad
+      - record: slo:events_bad:rate5m
+        expr: |
+          (
+            (avg_over_time(temporal_cloud_v1_activity_fail_count[5m])    or avg_over_time(temporal_cloud_v1_activity_success_count[5m]) * 0)
+            +
+            (avg_over_time(temporal_cloud_v1_activity_timeout_count[5m]) or avg_over_time(temporal_cloud_v1_activity_success_count[5m]) * 0)
+          )
+        labels:
+          sli: activity_completion
+      - record: slo:events_total:rate5m
+        expr: |
+          (
+            avg_over_time(temporal_cloud_v1_activity_success_count[5m])
+            +
+            (avg_over_time(temporal_cloud_v1_activity_fail_count[5m])    or avg_over_time(temporal_cloud_v1_activity_success_count[5m]) * 0)
+            +
+            (avg_over_time(temporal_cloud_v1_activity_timeout_count[5m]) or avg_over_time(temporal_cloud_v1_activity_success_count[5m]) * 0)
+          )
+        labels:
+          sli: activity_completion
+
+      # --- task_delivery: Tasks arriving on a Task Queue that had an active poller
+      - record: slo:events_bad:rate5m
+        expr: |
+          avg_over_time(temporal_cloud_v1_no_poller_tasks_count[5m])
+            or avg_over_time(temporal_cloud_v1_service_request_count[5m]) * 0
+        labels:
+          sli: task_delivery
+      - record: slo:events_total:rate5m
+        expr: |
+          (
+            avg_over_time(temporal_cloud_v1_no_poller_tasks_count[5m])
+            + avg_over_time(temporal_cloud_v1_workflow_success_count[5m])
+          )
+        labels:
+          sli: task_delivery
+
+  # ==========================================================================
+  # LAYER 2 — ratios, objectives, budgets, burn rates. Generic.
+  # ==========================================================================
+  - name: temporal-cloud-slo-meta
+    interval: 60s
+    rules:
+
+      # avg_over_time over the 5m recordings. Correct AND cheap: because
+      # avg(rate) == events / window, dividing avg_bad by avg_total gives the
+      # traffic-weighted ratio rather than an average of ratios.
+      - record: slo:sli_bad:ratio_rate5m
+        expr: |
+          slo:events_bad:rate5m
+          /
+          slo:events_total:rate5m
+      - record: slo:sli_bad:ratio_rate30m
+        expr: |
+          avg_over_time(slo:events_bad:rate5m[30m])
+          /
+          avg_over_time(slo:events_total:rate5m[30m])
+      - record: slo:sli_bad:ratio_rate1h
+        expr: |
+          avg_over_time(slo:events_bad:rate5m[1h])
+          /
+          avg_over_time(slo:events_total:rate5m[1h])
+      - record: slo:sli_bad:ratio_rate2h
+        expr: |
+          avg_over_time(slo:events_bad:rate5m[2h])
+          /
+          avg_over_time(slo:events_total:rate5m[2h])
+      - record: slo:sli_bad:ratio_rate6h
+        expr: |
+          avg_over_time(slo:events_bad:rate5m[6h])
+          /
+          avg_over_time(slo:events_total:rate5m[6h])
+      - record: slo:sli_bad:ratio_rate1d
+        expr: |
+          avg_over_time(slo:events_bad:rate5m[1d])
+          /
+          avg_over_time(slo:events_total:rate5m[1d])
+      - record: slo:sli_bad:ratio_rate3d
+        expr: |
+          avg_over_time(slo:events_bad:rate5m[3d])
+          /
+          avg_over_time(slo:events_total:rate5m[3d])
+      - record: slo:sli_bad:ratio_rate28d
+        expr: |
+          avg_over_time(slo:events_bad:rate5m[28d])
+          /
+          avg_over_time(slo:events_total:rate5m[28d])
+
+      # Objectives. 99.9% matches the standard single-region SLA.
+      # Raise cloud_service_availability to 0.9999 on an HA Namespace.
+      - record: slo:objective:ratio
+        expr: vector(0.999)
+        labels:
+          sli: cloud_service_availability
+      - record: slo:objective:ratio
+        expr: vector(0.99)
+        labels:
+          sli: cloud_start_workflow_latency
+      - record: slo:objective:ratio
+        expr: vector(0.99)
+        labels:
+          sli: workflow_completion
+      - record: slo:objective:ratio
+        expr: vector(0.99)
+        labels:
+          sli: activity_completion
+      - record: slo:objective:ratio
+        expr: vector(0.999)
+        labels:
+          sli: task_delivery
+
+      - record: slo:error_budget:ratio
+        expr: 1 - slo:objective:ratio
+
+      - record: slo:compliance_window_bad:ratio
+        expr: slo:sli_bad:ratio_rate28d
+      - record: slo:burn_rate:ratio_rate5m
+        expr: |
+          slo:sli_bad:ratio_rate5m
+            / on(sli) group_left() slo:error_budget:ratio
+      - record: slo:burn_rate:ratio_rate30m
+        expr: |
+          slo:sli_bad:ratio_rate30m
+            / on(sli) group_left() slo:error_budget:ratio
+      - record: slo:burn_rate:ratio_rate1h
+        expr: |
+          slo:sli_bad:ratio_rate1h
+            / on(sli) group_left() slo:error_budget:ratio
+      - record: slo:burn_rate:ratio_rate2h
+        expr: |
+          slo:sli_bad:ratio_rate2h
+            / on(sli) group_left() slo:error_budget:ratio
+      - record: slo:burn_rate:ratio_rate6h
+        expr: |
+          slo:sli_bad:ratio_rate6h
+            / on(sli) group_left() slo:error_budget:ratio
+      - record: slo:burn_rate:ratio_rate1d
+        expr: |
+          slo:sli_bad:ratio_rate1d
+            / on(sli) group_left() slo:error_budget:ratio
+      - record: slo:burn_rate:ratio_rate3d
+        expr: |
+          slo:sli_bad:ratio_rate3d
+            / on(sli) group_left() slo:error_budget:ratio
+
+      - record: slo:error_budget_remaining:ratio
+        expr: |
+          1 - (
+            slo:compliance_window_bad:ratio
+              / on(sli) group_left() slo:error_budget:ratio
+          )
+
+      - record: slo:sli_good:ratio
+        expr: 1 - slo:compliance_window_bad:ratio
+
+      - record: slo:objective_expanded:ratio
+        expr: |
+          slo:compliance_window_bad:ratio * 0
+            + on(sli) group_left() slo:objective:ratio
+
+  # ==========================================================================
+  # LAYER 3 — burn-rate alerts. Identical model to the self-hosted bundle.
+  # ==========================================================================
+  - name: temporal-cloud-slo-burn
+    rules:
+      - alert: SLOFastBurn
+        expr: |
+          (slo:burn_rate:ratio_rate1h > 14.4) and (slo:burn_rate:ratio_rate5m > 14.4)
+        for: 2m
+        labels: {severity: page, component: temporal-cloud-slo}
+        annotations:
+          summary: "{{ $labels.sli }} burning budget 14.4x in {{ $labels.temporal_namespace }}"
+          description: "The entire 28d budget goes in about two hours at this rate. If cloud_service_availability is the SLI, check https://status.temporal.io before assuming it is yours."
+
+      - alert: SLOSlowBurn
+        expr: |
+          (slo:burn_rate:ratio_rate6h > 6) and (slo:burn_rate:ratio_rate30m > 6)
+        for: 15m
+        labels: {severity: page, component: temporal-cloud-slo}
+        annotations:
+          summary: "{{ $labels.sli }} burning budget 6x in {{ $labels.temporal_namespace }}"
+          description: "Slower, still exhausts the budget well before the window ends."
+
+      - alert: SLOBudgetBurnTicket
+        expr: |
+          (slo:burn_rate:ratio_rate1d > 3) and (slo:burn_rate:ratio_rate2h > 3)
+        for: 1h
+        labels: {severity: ticket, component: temporal-cloud-slo}
+        annotations:
+          summary: "{{ $labels.sli }} burning budget 3x in {{ $labels.temporal_namespace }}"
+          description: "Not an emergency. Worth a ticket before it becomes one."
+
+      - alert: SLOErrorBudgetExhausted
+        expr: slo:error_budget_remaining:ratio <= 0
+        for: 10m
+        labels: {severity: ticket, component: temporal-cloud-slo}
+        annotations:
+          summary: "{{ $labels.sli }} exhausted its 28d budget in {{ $labels.temporal_namespace }}"
+          description: "If this is cloud_service_availability and Temporal was at fault, you may have an SLA claim - but use Temporal's own figure, not this one. See docs/SLA-AND-SLOS.md."
