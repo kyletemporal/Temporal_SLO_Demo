@@ -91,7 +91,10 @@ HEADER = f'''# =================================================================
 #   $NAMESPACE    your Temporal Namespace
 #   $TASK_QUEUE   your Task Queue
 #
-#   sed -i 's/\\$NAMESPACE/my-team-prod/g; s/\\$TASK_QUEUE/orders/g' slo-rules.yml
+#   ./scripts/configure.sh my-team-prod orders
+#
+# Use the script, not sed: `sed -i` needs a backup-suffix argument on BSD/macOS
+# and the naive form fails there silently enough to waste an afternoon.
 #
 # The scope is not optional. A platform Prometheus carries every tenant's
 # series; unscoped, your SLO quietly measures somebody else's Workflows and

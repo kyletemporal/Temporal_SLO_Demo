@@ -231,3 +231,47 @@ silent:
 Not verified: dashboard rendering (queries all parse, 14/14), and the bundle has
 never been used by an actual second team on a shared platform Prometheus —
 the multi-tenant scoping is reasoned, not observed.
+
+---
+
+## Landmine sweep #2 (2026-08-13) — after `cloud/` and `app-team/`
+
+**Fixed**
+
+1. **`make validate` failed on a freshly-restarted healthy stack.** The
+   golden-signals dashboard added empty-by-design panels whose titles did not
+   match the allowlist — `Workflow outcomes` vs `Workflow Outcomes`, `Tasks with
+   no poller` vs `Tasks With No Poller (expect zero)`, plus `Server-fault rate
+   by type`, which is empty precisely when nothing is wrong. The earlier run
+   passed only because recent chaos had left data in the window. Matching is now
+   case-insensitive and the missing panels are allowlisted with reasons.
+   Re-verified: 24/0 on a healthy stack, still FAILS on an injected bad query.
+2. **`sed -i 's/…'` in the app-team docs fails on macOS.** BSD sed reads the
+   next argument as a backup suffix, so the documented *first step of adoption*
+   breaks on the platform most likely to be used. Replaced with
+   `app-team/scripts/configure.sh`, which substitutes in Python, **uncomments
+   `AppWorkerFleetAbsent`** (the step most likely to be skipped), and runs
+   `promtool` when available. Verified end to end: 4 alerts became 5, zero
+   leftover placeholders, promtool clean.
+3. **Alert-name collisions between `production/` and `cloud/`.** Both defined
+   `SLOFastBurn`, `SLOSlowBurn`, `SLOBudgetBurnTicket` and
+   `SLOErrorBudgetExhausted` — and the docs explicitly bless running those two
+   bundles in one Prometheus. An on-call would have seen `SLOFastBurn` with no
+   way to tell which stack fired. Cloud's are now `CloudSLO*`.
+4. **Stale counts and prose.** `production/README` claimed 10 alerts after one
+   was commented out (now 9 + 1 commented); the root README said "Three bundles"
+   with four present, and repeated the old count.
+
+**Verified clean this round**
+
+No secrets or absolute paths; all shell and Python parses; every relative
+markdown link resolves; no duplicate dashboard UIDs; zero record-name collisions
+involving `cloud/` or `app-team/`; all eight rule files pass `promtool`;
+generators idempotent. The shipped, *unsubstituted* app-team files pass
+`promtool` and are **silently inert** rather than firing spuriously — the safe
+failure mode, and `conformance-check.sh` catches the silence.
+
+**Accepted**
+
+`demo/` and `production/` still share 14 `slo:*` record names. They are
+alternatives, never both, and both READMEs say so.

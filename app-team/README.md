@@ -10,7 +10,7 @@ one that inherits fifty and reads none.
 ```
 prometheus/
   slo-rules.yml       3 SLIs, 28-day error budgets, 2 burn alerts (24 rules)
-  alerts.yml          5 alerts — the minimum useful set
+  alerts.yml          5 alerts — 4 active, 1 (absence) ships commented out
 grafana/dashboards/
   temporal-app-team.json    one screen
 scripts/
@@ -23,17 +23,22 @@ scripts/
 
 ```bash
 # 1. Point the rules at your namespace and task queue
-sed -i 's/\$NAMESPACE/my-team-prod/g; s/\$TASK_QUEUE/orders/g' \
-  prometheus/slo-rules.yml prometheus/alerts.yml
+./scripts/configure.sh my-team-prod orders
 
-# 2. Uncomment AppWorkerFleetAbsent at the bottom of alerts.yml  ← do not skip
+# 2. Load them (written to ./configured/, templates untouched)
+cp configured/*.yml /etc/prometheus/ && curl -X POST http://prometheus:9090/-/reload
 
-# 3. Load them
-cp prometheus/*.yml /etc/prometheus/ && promtool check rules /etc/prometheus/*.yml
-
-# 4. Import the dashboard, then prove it works
+# 3. Import the dashboard, then prove it works
 NAMESPACE=my-team-prod TASK_QUEUE=orders ./scripts/conformance-check.sh
 ```
+
+`configure.sh` also **uncomments `AppWorkerFleetAbsent`** — the alert nothing
+else can replace and the step most likely to be skipped — and validates the
+result with `promtool` when it is available.
+
+It exists because doing step 1 by hand is a trap: `sed -i 's/…'` **fails on
+macOS**, where BSD sed reads the next argument as a backup suffix. The script
+substitutes in Python instead, so it behaves the same everywhere.
 
 The conformance check exits non-zero until you are conformant, so it works as a
 CI gate or as something your platform team runs against you.

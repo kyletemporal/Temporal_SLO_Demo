@@ -2,7 +2,7 @@
 
 Observability, SLOs and error budgets for a **self-hosted** Temporal Service.
 
-Three bundles and a toolbox:
+Four bundles and a toolbox:
 
 | | What it is | Use it to |
 |---|---|---|
@@ -109,8 +109,8 @@ function that is not running. What to change is in
 
 ## Deploying the production bundle
 
-`production/` has no demo app and no `auto-setup`. 46 SLO rules + 10
-operational alerts + 2 dashboards.
+`production/` has no demo app and no `auto-setup`. 46 SLO rules + 9 operational
+alerts (a 10th ships commented out — see below) + 2 dashboards.
 
 ```bash
 cp production/prometheus/*.yml /etc/prometheus/

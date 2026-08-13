@@ -212,10 +212,15 @@ def emit():
     out.append(f'''
   # ==========================================================================
   # LAYER 3 — burn-rate alerts. Identical model to the self-hosted bundle.
+  #
+  # ALERT NAMES ARE PREFIXED `CloudSLO` for the same reason the records are
+  # prefixed `cloudslo:`. A team running self-hosted AND Cloud in one
+  # Prometheus would otherwise see two different alerts both called
+  # SLOFastBurn, and an on-call has no way to tell which stack fired.
   # ==========================================================================
   - name: temporal-cloud-slo-burn
     rules:
-      - alert: SLOFastBurn
+      - alert: CloudSLOFastBurn
         expr: |
           (cloudslo:burn_rate:ratio_rate1h > 14.4) and (cloudslo:burn_rate:ratio_rate5m > 14.4)
         for: 2m
@@ -224,7 +229,7 @@ def emit():
           summary: "{{{{ $labels.sli }}}} burning budget 14.4x in {{{{ $labels.temporal_namespace }}}}"
           description: "The entire {COMPLIANCE} budget goes in about two hours at this rate. If cloud_service_availability is the SLI, check https://status.temporal.io before assuming it is yours."
 
-      - alert: SLOSlowBurn
+      - alert: CloudSLOSlowBurn
         expr: |
           (cloudslo:burn_rate:ratio_rate6h > 6) and (cloudslo:burn_rate:ratio_rate30m > 6)
         for: 15m
@@ -233,7 +238,7 @@ def emit():
           summary: "{{{{ $labels.sli }}}} burning budget 6x in {{{{ $labels.temporal_namespace }}}}"
           description: "Slower, still exhausts the budget well before the window ends."
 
-      - alert: SLOBudgetBurnTicket
+      - alert: CloudSLOBudgetBurnTicket
         expr: |
           (cloudslo:burn_rate:ratio_rate1d > 3) and (cloudslo:burn_rate:ratio_rate2h > 3)
         for: 1h
@@ -242,7 +247,7 @@ def emit():
           summary: "{{{{ $labels.sli }}}} burning budget 3x in {{{{ $labels.temporal_namespace }}}}"
           description: "Not an emergency. Worth a ticket before it becomes one."
 
-      - alert: SLOErrorBudgetExhausted
+      - alert: CloudSLOErrorBudgetExhausted
         expr: cloudslo:error_budget_remaining:ratio <= 0
         for: 10m
         labels: {{severity: ticket, component: temporal-cloud-slo}}

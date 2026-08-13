@@ -143,13 +143,21 @@ if not HAS_TRAFFIC:
     print("        traffic will WARN rather than FAIL. Run 'make smoke' or")
     print("        'make baseline', wait ~30s, and re-run for a full check.")
 
-EXPECTED_EMPTY = {
-    # panel title -> why it is empty when nothing is wrong
+# Matched CASE-INSENSITIVELY: the same concept is titled differently on
+# different dashboards ("Workflow Outcomes" vs "Workflow outcomes"), and an
+# allowlist that misses on capitalisation fails a perfectly healthy stack.
+EXPECTED_EMPTY = {k.lower(): v for k, v in {
     "Tasks With No Poller (expect zero)":
         "no orphaned Task Queues (the panel title says so)",
+    "Tasks with no poller":
+        "no orphaned Task Queues — above zero is the alarm",
     "Workflow Outcomes":
         "failed/timeout/cancel series only exist once such an outcome occurs",
-}
+    "Workflow outcomes":
+        "failed/timeout series only exist once such an outcome occurs",
+    "Server-fault rate by type":
+        "no server faults have occurred — empty here is the healthy state",
+}.items()}
 
 def panels(ps):
     for p in ps:
@@ -186,8 +194,8 @@ for path in sorted(glob.glob("grafana/dashboards/*/*.json")):
             title = p.get("title", "?")
             if st == "DATA":
                 print(f"    \033[32m PASS\033[0m  {title[:58]}")
-            elif st == "EMPTY" and title in EXPECTED_EMPTY:
-                print(f"    \033[33m ----\033[0m  {title[:58]}  (empty by design: {EXPECTED_EMPTY[title]})")
+            elif st == "EMPTY" and title.lower() in EXPECTED_EMPTY:
+                print(f"    \033[33m ----\033[0m  {title[:58]}  (empty by design: {EXPECTED_EMPTY[title.lower()]})")
             elif st == "EMPTY" and not HAS_TRAFFIC:
                 print(f"    \033[33m WARN\033[0m  {title[:58]}  no data (no traffic yet)")
             elif st == "EMPTY":

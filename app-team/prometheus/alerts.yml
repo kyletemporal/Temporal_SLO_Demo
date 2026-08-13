@@ -6,7 +6,10 @@
 # and you stop reading them.
 #
 # SUBSTITUTE FIRST:
-#   sed -i 's/\$NAMESPACE/my-team-prod/g; s/\$TASK_QUEUE/orders/g' alerts.yml
+#   ./scripts/configure.sh my-team-prod orders
+#
+# Use the script rather than sed: `sed -i` needs a backup-suffix argument on
+# BSD/macOS, so the naive one-liner fails there.
 #
 # The scope matters. On a shared platform Prometheus, an unscoped rule pages you
 # for another tenant's incident.
