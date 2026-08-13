@@ -1,0 +1,206 @@
+# =============================================================================
+# MINIMUM SLOs for a Temporal application team
+# =============================================================================
+#
+# Three SLIs. That is the whole standard, and it is deliberately small — a team
+# that maintains three meaningful SLOs is far better off than one that inherits
+# thirty and reads none.
+#
+#   workflow_completion   did the work finish?      <- your users feel this
+#   task_delivery         did Workers keep up?      <- your capacity
+#   workflow_latency      was it fast enough?       <- your promise
+#
+# ---------------------------------------------------------------------------
+# BEFORE THIS WILL WORK — two substitutions
+# ---------------------------------------------------------------------------
+#   $NAMESPACE    your Temporal Namespace
+#   $TASK_QUEUE   your Task Queue
+#
+#   sed -i 's/\$NAMESPACE/my-team-prod/g; s/\$TASK_QUEUE/orders/g' slo-rules.yml
+#
+# The scope is not optional. A platform Prometheus carries every tenant's
+# series; unscoped, your SLO quietly measures somebody else's Workflows and
+# you page on their incident.
+#
+# ---------------------------------------------------------------------------
+# Record names are prefixed `appslo:`
+# ---------------------------------------------------------------------------
+# So your rules can live in the same Prometheus as the platform team's without
+# either set overwriting the other.
+#
+# ---------------------------------------------------------------------------
+# These come from YOUR Workers
+# ---------------------------------------------------------------------------
+# Every metric here is emitted by your own Worker process. If your Workers stop,
+# these series STOP EXISTING — they do not go to zero. A threshold alert cannot
+# detect that; only an absence alert can, which is why alerts.yml ships one.
+#
+# Ask your platform team to also expose the cluster-side view of your Namespace
+# (workflow_success / workflow_failed / no_poller_tasks). Those keep reporting
+# when your Workers are down and are the backstop for exactly this blind spot.
+#
+# ---------------------------------------------------------------------------
+# The objectives are placeholders
+# ---------------------------------------------------------------------------
+# 99% / 99% / 95% are round numbers. Run these for two weeks in recording-only
+# mode, look at what you actually deliver, then promise that. Tunables at the
+# top of the generator: S2S_LE=1.0s, E2E_LE=10.0s.
+# =============================================================================
+
+groups:
+  - name: temporal-app-slo-events
+    interval: 30s
+    rules:
+
+      # --- workflow_completion: Workflow Executions that completed successfully
+      - record: appslo:events_bad:rate5m
+        expr: |
+          (
+            sum(rate(temporal_workflow_failed_total{namespace="$NAMESPACE", task_queue="$TASK_QUEUE"}[5m]))
+            or
+            sum(rate(temporal_workflow_completed_total{namespace="$NAMESPACE", task_queue="$TASK_QUEUE"}[5m])) * 0
+          )
+        labels:
+          sli: workflow_completion
+      - record: appslo:events_total:rate5m
+        expr: |
+          (
+            sum(rate(temporal_workflow_completed_total{namespace="$NAMESPACE", task_queue="$TASK_QUEUE"}[5m]))
+            +
+            (
+              sum(rate(temporal_workflow_failed_total{namespace="$NAMESPACE", task_queue="$TASK_QUEUE"}[5m]))
+              or
+              sum(rate(temporal_workflow_completed_total{namespace="$NAMESPACE", task_queue="$TASK_QUEUE"}[5m])) * 0
+            )
+          )
+        labels:
+          sli: workflow_completion
+
+      # --- task_delivery: Activity Tasks picked up by a Worker within 1.0s of scheduling
+      - record: appslo:events_bad:rate5m
+        expr: |
+          clamp_min(
+            sum(rate(temporal_activity_schedule_to_start_latency_seconds_count{namespace="$NAMESPACE", task_queue="$TASK_QUEUE"}[5m]))
+            -
+            sum(rate(temporal_activity_schedule_to_start_latency_seconds_bucket{namespace="$NAMESPACE", task_queue="$TASK_QUEUE", le="1.0"}[5m])),
+            0
+          )
+        labels:
+          sli: task_delivery
+      - record: appslo:events_total:rate5m
+        expr: |
+          sum(rate(temporal_activity_schedule_to_start_latency_seconds_count{namespace="$NAMESPACE", task_queue="$TASK_QUEUE"}[5m]))
+        labels:
+          sli: task_delivery
+
+      # --- workflow_latency: Workflows finishing end-to-end within 10.0s
+      - record: appslo:events_bad:rate5m
+        expr: |
+          clamp_min(
+            sum(rate(temporal_workflow_endtoend_latency_seconds_count{namespace="$NAMESPACE", task_queue="$TASK_QUEUE"}[5m]))
+            -
+            sum(rate(temporal_workflow_endtoend_latency_seconds_bucket{namespace="$NAMESPACE", task_queue="$TASK_QUEUE", le="10.0"}[5m])),
+            0
+          )
+        labels:
+          sli: workflow_latency
+      - record: appslo:events_total:rate5m
+        expr: |
+          sum(rate(temporal_workflow_endtoend_latency_seconds_count{namespace="$NAMESPACE", task_queue="$TASK_QUEUE"}[5m]))
+        labels:
+          sli: workflow_latency
+
+  - name: temporal-app-slo-meta
+    interval: 30s
+    rules:
+      - record: appslo:sli_bad:ratio_rate5m
+        expr: |
+          appslo:events_bad:rate5m
+          /
+          appslo:events_total:rate5m
+      - record: appslo:sli_bad:ratio_rate30m
+        expr: |
+          avg_over_time(appslo:events_bad:rate5m[30m])
+          /
+          avg_over_time(appslo:events_total:rate5m[30m])
+      - record: appslo:sli_bad:ratio_rate1h
+        expr: |
+          avg_over_time(appslo:events_bad:rate5m[1h])
+          /
+          avg_over_time(appslo:events_total:rate5m[1h])
+      - record: appslo:sli_bad:ratio_rate6h
+        expr: |
+          avg_over_time(appslo:events_bad:rate5m[6h])
+          /
+          avg_over_time(appslo:events_total:rate5m[6h])
+      - record: appslo:sli_bad:ratio_rate28d
+        expr: |
+          avg_over_time(appslo:events_bad:rate5m[28d])
+          /
+          avg_over_time(appslo:events_total:rate5m[28d])
+      - record: appslo:objective:ratio
+        expr: vector(0.99)
+        labels:
+          sli: workflow_completion
+      - record: appslo:objective:ratio
+        expr: vector(0.99)
+        labels:
+          sli: task_delivery
+      - record: appslo:objective:ratio
+        expr: vector(0.95)
+        labels:
+          sli: workflow_latency
+      - record: appslo:error_budget:ratio
+        expr: 1 - appslo:objective:ratio
+      - record: appslo:compliance_window_bad:ratio
+        expr: appslo:sli_bad:ratio_rate28d
+      - record: appslo:burn_rate:ratio_rate5m
+        expr: |
+          appslo:sli_bad:ratio_rate5m
+            / on(sli) group_left() appslo:error_budget:ratio
+      - record: appslo:burn_rate:ratio_rate30m
+        expr: |
+          appslo:sli_bad:ratio_rate30m
+            / on(sli) group_left() appslo:error_budget:ratio
+      - record: appslo:burn_rate:ratio_rate1h
+        expr: |
+          appslo:sli_bad:ratio_rate1h
+            / on(sli) group_left() appslo:error_budget:ratio
+      - record: appslo:burn_rate:ratio_rate6h
+        expr: |
+          appslo:sli_bad:ratio_rate6h
+            / on(sli) group_left() appslo:error_budget:ratio
+      - record: appslo:error_budget_remaining:ratio
+        expr: |
+          1 - (
+            appslo:compliance_window_bad:ratio
+              / on(sli) group_left() appslo:error_budget:ratio
+          )
+      - record: appslo:sli_good:ratio
+        expr: 1 - appslo:compliance_window_bad:ratio
+
+  # ==========================================================================
+  # Two burn-rate alerts. Minimum useful set.
+  #
+  # Two windows must breach together: the long one proves the burn is real, the
+  # short one proves it is still happening, so the alert clears when you fix it
+  # rather than lingering for an hour.
+  # ==========================================================================
+  - name: temporal-app-slo-burn
+    rules:
+      - alert: AppSLOFastBurn
+        expr: |
+          (appslo:burn_rate:ratio_rate1h > 14.4) and (appslo:burn_rate:ratio_rate5m > 14.4)
+        for: 2m
+        labels: {severity: page, component: temporal-app}
+        annotations:
+          summary: "{{ $labels.sli }} is burning error budget 14.4x too fast"
+          description: "At this rate the whole 28-day budget is gone in about two hours."
+
+      - alert: AppSLOErrorBudgetExhausted
+        expr: appslo:error_budget_remaining:ratio <= 0
+        for: 15m
+        labels: {severity: ticket, component: temporal-app}
+        annotations:
+          summary: "{{ $labels.sli }} has spent its 28-day error budget"
+          description: "You have missed this SLO across the compliance window. Under a standard error budget policy that means slowing risky change until it recovers."

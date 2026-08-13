@@ -208,3 +208,26 @@ documented as accepted risks.
 Python files parse, every relative markdown link resolves, `.gitignore` behaves,
 all six rule files pass `promtool`, and every generator is idempotent and
 reproduces its committed output.
+
+---
+
+## `app-team/` — the minimum standard
+
+Rules were loaded into a live Prometheus against a running Worker and confirmed
+to evaluate: all three SLIs produce series with sane values. The conformance
+check was exercised in both directions — exit 1 when rules are missing or the
+absence alert is disabled, exit 0 once configured — and it correctly rejects a
+bucket boundary that does not exist.
+
+**Two bugs were caught by running it**, both worth knowing because they are
+silent:
+
+- `le` is a **string match**. `le="1"` does not match the SDK's `le="1.0"`, and
+  the SLI produced **no series at all** — not a wrong number, no number.
+- The SDK's default histogram buckets **top out at 10s**, so the original 60s
+  latency objective matched nothing. `conformance-check.sh` now verifies both
+  boundaries exist and prints the real ones when they do not.
+
+Not verified: dashboard rendering (queries all parse, 14/14), and the bundle has
+never been used by an actual second team on a shared platform Prometheus —
+the multi-tenant scoping is reasoned, not observed.

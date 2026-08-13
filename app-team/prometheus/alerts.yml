@@ -1,0 +1,143 @@
+# =============================================================================
+# MINIMUM alert set for a Temporal application team
+# =============================================================================
+#
+# Five alerts. Anything less and you are blind to a class of failure; much more
+# and you stop reading them.
+#
+# SUBSTITUTE FIRST:
+#   sed -i 's/\$NAMESPACE/my-team-prod/g; s/\$TASK_QUEUE/orders/g' alerts.yml
+#
+# The scope matters. On a shared platform Prometheus, an unscoped rule pages you
+# for another tenant's incident.
+# =============================================================================
+
+groups:
+  - name: temporal-app-minimum
+    rules:
+
+      # -----------------------------------------------------------------------
+      # 1. Are my Workflows finishing?
+      #
+      # The RATIO, not the count. A healthy Temporal application absorbs
+      # Activity failures through retries — alerting on Activity failure count
+      # guarantees false pages. Only a terminal Workflow outcome is a signal.
+      #
+      # The `or ... * 0` guard is load-bearing: temporal_workflow_failed_total
+      # DOES NOT EXIST until your first failure, so the naive form returns
+      # nothing — no series, no alert — exactly when everything is failing.
+      # -----------------------------------------------------------------------
+      - alert: AppWorkflowFailureRatioHigh
+        expr: |
+          (
+            sum(rate(temporal_workflow_failed_total{namespace="$NAMESPACE", task_queue="$TASK_QUEUE"}[5m]))
+            or
+            sum(rate(temporal_workflow_completed_total{namespace="$NAMESPACE", task_queue="$TASK_QUEUE"}[5m])) * 0
+          )
+          /
+          clamp_min(
+            sum(rate(temporal_workflow_completed_total{namespace="$NAMESPACE", task_queue="$TASK_QUEUE"}[5m]))
+            +
+            (
+              sum(rate(temporal_workflow_failed_total{namespace="$NAMESPACE", task_queue="$TASK_QUEUE"}[5m]))
+              or
+              sum(rate(temporal_workflow_completed_total{namespace="$NAMESPACE", task_queue="$TASK_QUEUE"}[5m])) * 0
+            ),
+            0.001
+          )
+          > 0.05
+        for: 10m
+        labels:
+          severity: page
+          component: temporal-app
+        annotations:
+          summary: "Over 5% of Workflows failing on $TASK_QUEUE"
+          description: "Terminal Workflow failures, not absorbed Activity retries. Check retry policies (MaximumAttempts=1 turns every Activity failure into a Workflow failure) and whether your Workflow handles its failure paths at all."
+
+      # -----------------------------------------------------------------------
+      # 2. Are my Workers keeping up?
+      #
+      # Schedule-to-start is QUEUE WAIT, not execution time — how long work sat
+      # before a Worker picked it up. It is the earliest customer-visible sign
+      # of an undersized fleet.
+      #
+      # If this reads suspiciously flat during a known backlog, you have set
+      # ScheduleToStartTimeout in ActivityOptions; it truncates the metric and
+      # hides the problem. Leave it unset.
+      # -----------------------------------------------------------------------
+      - alert: AppTaskDeliverySlow
+        expr: |
+          histogram_quantile(0.99,
+            sum by (le) (
+              rate(temporal_activity_schedule_to_start_latency_seconds_bucket{namespace="$NAMESPACE", task_queue="$TASK_QUEUE"}[5m])
+            )
+          ) > 1
+        for: 10m
+        labels:
+          severity: ticket
+          component: temporal-app
+        annotations:
+          summary: "Activity schedule-to-start p99 above 1s on $TASK_QUEUE"
+          description: "Tasks are queuing for Workers. Before adding Workers, check task slots AND Worker host CPU: high CPU means add Workers, low CPU means raise MaxConcurrentActivityExecutionSize. They look identical on this metric and the fixes are opposite."
+
+      # -----------------------------------------------------------------------
+      # 3. Am I out of capacity?
+      # -----------------------------------------------------------------------
+      - alert: AppWorkerSlotsExhausted
+        expr: |
+          min by (worker_type) (
+            temporal_worker_task_slots_available{namespace="$NAMESPACE", task_queue="$TASK_QUEUE"}
+          ) == 0
+        for: 10m
+        labels:
+          severity: ticket
+          component: temporal-app
+        annotations:
+          summary: "No free {{ $labels.worker_type }} slots on $TASK_QUEUE"
+          description: "Your Workers cannot accept more Tasks. If host CPU and memory are low this is a concurrency setting, not a capacity shortage."
+
+      # -----------------------------------------------------------------------
+      # 4. Can my Workers reach Temporal?
+      #
+      # Distinguishes "my code is broken" from "I cannot talk to the platform".
+      # If this fires, it is a conversation with your platform team, not a code
+      # change — and having the distinction ready saves an hour on a call.
+      # -----------------------------------------------------------------------
+      - alert: AppCannotReachTemporal
+        expr: |
+          sum(rate(temporal_request_failure_total{namespace="$NAMESPACE"}[5m])) > 0
+        for: 5m
+        labels:
+          severity: page
+          component: temporal-app
+        annotations:
+          summary: "Worker requests to Temporal are failing in $NAMESPACE"
+          description: "Your Workers cannot reach the Temporal Service cleanly. Check the platform status before your own code. NOTE: temporal_request_failure_total does not exist until the first failure, so this alert is silent — not healthy — on a Worker that has never had a request fail."
+
+      # -----------------------------------------------------------------------
+      # 5. ARE MY WORKERS ALIVE AT ALL?
+      #
+      # THE MOST IMPORTANT RULE HERE, and the one no threshold can replace.
+      #
+      # When your Worker fleet dies, its metrics do not go to zero — the series
+      # STOP EXISTING. AppWorkerSlotsExhausted above compares `== 0` against a
+      # series that is gone, which matches nothing. Absence has to be asserted.
+      #
+      # Scope it to YOUR namespace and task queue. A bare
+      # absent(temporal_worker_task_slots_available) never fires on a shared
+      # platform: somebody else's Workers, and Temporal's own internal Workers,
+      # keep the metric alive forever.
+      #
+      # SHIPS COMMENTED OUT because absent() on a selector matching nothing
+      # returns 1 — left enabled with $NAMESPACE unsubstituted it fires
+      # immediately and permanently. Substitute, then uncomment. Do not skip it.
+      # -----------------------------------------------------------------------
+      # - alert: AppWorkerFleetAbsent
+      #   expr: absent(temporal_worker_task_slots_available{namespace="$NAMESPACE", task_queue="$TASK_QUEUE"})
+      #   for: 2m
+      #   labels:
+      #     severity: page
+      #     component: temporal-app
+      #   annotations:
+      #     summary: "No Workers polling $NAMESPACE/$TASK_QUEUE"
+      #     description: "Your Worker fleet has stopped reporting entirely — deploy failure, crash loop, or node drain. Work is accumulating and nothing is executing it. Nothing will fail; it will simply not happen."

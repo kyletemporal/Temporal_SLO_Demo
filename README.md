@@ -9,13 +9,15 @@ Three bundles and a toolbox:
 | **`demo/`** | A complete stack that runs on a laptop: Temporal, Postgres, Prometheus, Grafana, a Go app, and five chaos scenarios | *See* what a backlog, a starved Worker and an orphaned Task Queue look like before you meet one at 2am |
 | **`production/`** | Rules and dashboards for a **self-hosted** cluster, no demo app | Drop into a real self-hosted deployment |
 | **`cloud/`** | Rules and dashboards for **Temporal Cloud**, built on the Cloud SLA | Monitor a Cloud Namespace and build SLOs on top of Temporal's |
+| **`app-team/`** | The **minimum standard** for teams that build Workflows on someone else's Temporal platform | Hand to your clients; enforce with its conformance check |
 | **`tools/`** | Generators for the rule files and dashboards | Regenerate after editing an SLI |
 
 **Never load two of these bundles into one Prometheus.** `demo/` and
 `production/` both record `slo:*` series with overlapping `sli` labels, so
 loading both produces duplicate series and silently wrong SLO numbers. `cloud/`
-is prefixed `cloudslo:*` precisely so a team running self-hosted *and* Cloud can
-keep both in one Prometheus safely.
+is prefixed `cloudslo:*` and `app-team/` is prefixed `appslo:*`, so those can
+safely share a Prometheus with the platform team's rules — which is the normal
+case when application teams and the platform team scrape the same server.
 
 **Self-hosted or Cloud is not a cosmetic difference.** Cloud metric `_count`
 series are gauges holding pre-computed rates (so `rate()` is wrong), percentiles
@@ -137,6 +139,8 @@ python3 tools/generate_cloud_rules.py          # Temporal Cloud rules
 python3 tools/generate_slo_board.py            # SLO board
 python3 tools/generate_golden_signals.py       # golden signals (self-hosted)
 python3 tools/generate_cloud_golden_signals.py # golden signals (Cloud)
+python3 tools/generate_app_team_rules.py       # app-team minimum SLOs
+python3 tools/generate_app_team_dashboard.py   # app-team dashboard
 ```
 
 ---
