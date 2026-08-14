@@ -11,8 +11,8 @@ finding about `TemporalReportedProblems`, and the validation plan.
 | 2. Visibility monitor service | **done** — runs in the demo stack, proven against `chaos-stuck` |
 | 3. Recording rules | **done** — `demo/prometheus/monitor-rules.yml` |
 | 4. Alerts | **done** — over-budget, poll staleness, detection availability |
-| 5. Dashboard rows | not started |
-| 6. Runbook | not started |
+| 5. Dashboard rows | **done** — row M on the golden-signals board |
+| 6. Runbook | **done** — [`RUNBOOK.md`](RUNBOOK.md) |
 
 ## Step 1 — derive starter budgets
 
@@ -43,6 +43,17 @@ The heaviest coverage is on query construction, because the timestamp arithmetic
 in the age ladder is the easiest place here to be silently wrong: an off-by-one
 on a bucket boundary crashes nothing and quietly moves executions between SLO
 buckets.
+
+## Rules for production and cloud
+
+`tools/generate_visibility_rules.py` emits `production/prometheus/visibility-rules.yml`
+(`slo:` / `WorkflowSLO*`) and `cloud/prometheus/visibility-rules.yml`
+(`cloudslo:` / `CloudWorkflowSLO*`). Run `--check` in CI to catch drift.
+
+**There is no multiwindow burn-rate ladder, and that is deliberate** — see the
+generator's header. The monitor publishes point-in-time gauges over the full
+28-day window, so the short-window half of every burn-rate pair does not exist
+and `rate()` on them is meaningless. Error-budget threshold alerts ship instead.
 
 ## Step 2 — run the monitor
 

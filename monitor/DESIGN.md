@@ -227,8 +227,25 @@ this repo and will not be reintroduced.
 for 15m pages immediately. There is no acceptable steady-state rate of
 non-determinism errors, poison payloads, or bad deploys.
 
-Burn-rate alerts on the workflow compliance ratio follow the existing
-multiwindow ladder (14.4×/6× page, 3×/1× ticket) and route by `owner`.
+~~Burn-rate alerts on the workflow compliance ratio follow the existing
+multiwindow ladder (14.4×/6× page, 3×/1× ticket) and route by `owner`.~~
+
+**Corrected after building it: a multiwindow burn-rate ladder is not computable
+from what this service publishes.** The existing bundles derive burn rates from
+`rate()` over counters at several window lengths. This service publishes
+point-in-time **gauges** over the full `slo_window`, overwritten in place each
+poll — `rate()` on those is meaningless, and there is no 1h or 6h view of the
+same measurement to form the short-window half of a burn-rate pair. Shipping the
+ladder as specified would have produced rules that parse cleanly and never fire.
+
+What ships instead: `*_budget_remaining:ratio` with threshold alerts at 25% and
+0%, which is computable from these gauges and answers the operational question.
+
+Restoring a true ladder needs the monitor to publish **short-window** closed
+counts (a `short_window` config queried on the fast loop). That roughly doubles
+window-query cost against a rate-limited API, so it is a deliberate trade rather
+than an oversight — and it is the obvious next step if burn-rate paging matters
+more than query budget.
 
 ---
 

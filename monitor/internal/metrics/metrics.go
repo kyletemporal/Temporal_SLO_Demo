@@ -30,6 +30,7 @@ type Metrics struct {
 	ClosedInBudget  *prometheus.GaugeVec
 	ClosedOver      *prometheus.GaugeVec
 	BudgetSeconds   *prometheus.GaugeVec
+	Objective       *prometheus.GaugeVec
 	DetectionAvail  *prometheus.GaugeVec
 	PollDuration    *prometheus.HistogramVec
 	PollErrors      *prometheus.CounterVec
@@ -74,6 +75,14 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "Configured duration budget, in seconds.",
 		}, []string{"workflow_type"}),
 
+		// Exported for the same reason as BudgetSeconds: error-budget rules need
+		// the objective, and hardcoding 0.99 in a rule file means the config and
+		// the alert can drift apart silently.
+		Objective: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: ns, Name: "objective_ratio",
+			Help: "Configured objective for this workflow type, as a ratio.",
+		}, []string{"workflow_type"}),
+
 		// 0 means THIS SIGNAL DOES NOT WORK HERE, which is a completely different
 		// statement from "nothing is stuck". Without it, stuck_executions sitting
 		// at 0 on a server that lacks TemporalReportedProblems is indistinguishable
@@ -104,7 +113,7 @@ func New(reg prometheus.Registerer) *Metrics {
 		}, []string{"workflow_type", "query_kind"}),
 	}
 	reg.MustRegister(m.Running, m.OverBudget, m.Stuck, m.ClosedInBudget,
-		m.ClosedOver, m.BudgetSeconds, m.DetectionAvail, m.PollDuration,
+		m.ClosedOver, m.BudgetSeconds, m.Objective, m.DetectionAvail, m.PollDuration,
 		m.PollErrors, m.LastSuccessPoll)
 	return m
 }

@@ -299,6 +299,61 @@ P.append(logs_panel("Find stuck executions (workflow IDs)", {"h": 8, "w": 8, "x"
     '{project="temporal-obs-demo", service="worker"} |~ "TMPRL1100|TMPRL1101|(?i)(non.?determin|workflow task failed|deadlock detected|panic)"',
     "THE PANEL METRICS CANNOT REPLACE.\n\nSurfaces worker log lines for non-determinism and Workflow Task failures, which carry WorkflowID and RunID.\n\nTMPRL1100 = non-determinism; TMPRL1101 = deadlock detected during workflow run (a Workflow Task taking too long, usually a blocking call in Workflow code). Both codes verified present in this stack by forcing a real NDE with `make chaos-nde`. The Loki datasource defines derived fields on both, so each ID is a link straight into the Temporal UI.\n\nOn servers below 1.30 (no TemporalReportedProblems) this is the primary route from a stuck-workflow alert to the affected executions."))
 
+
+# =========================================================================
+# M — WORKFLOW DURATION SLO  (from the Visibility monitor, temporal_slo_*)
+#
+# The only row on this board that is not derived from Prometheus counters, and
+# that is the entire reason it exists. Every other panel here is built from
+# metrics that describe a Workflow which ENDED. An execution that never ends
+# increments none of them, so it is invisible everywhere above this row.
+#
+# Reproduce with `make chaos-stuck`: this row moves, nothing else does.
+# =========================================================================
+P.append(row("M — Workflow duration SLO  ·  the executions nothing else can see", 60))
+
+P.append(stat("Duration compliance", {"h": 6, "w": 5, "x": 0, "y": 61},
+    [tgt("slo:workflow_compliance:ratio", legend="{{workflow_type}}")],
+    "percentunit",
+    "Closed-in-budget / (closed-in-budget + closed-over-budget + still running past 1x budget).\n\nThe third term is why terminating a stuck Workflow does NOT improve this number: the execution moves from that term to closed-over-budget and the ratio is unchanged. Verified end to end — 5 executions moved and compliance held at 0.793336 exactly.",
+    thr={"mode": "absolute", "steps": [{"color": CRITICAL, "value": None},
+                                       {"color": SERIOUS, "value": 0.95},
+                                       {"color": GOOD, "value": 0.99}]},
+    decimals=2, novalue="monitor down?"))
+
+P.append(ts("Open executions past budget", {"h": 6, "w": 10, "x": 5, "y": 61},
+    [tgt('sum by (bucket) (temporal_slo_over_budget_executions)', legend="past {{bucket}}x budget")],
+    "short",
+    "OPEN executions that have exceeded N x their duration budget.\n\nNo alert above this row can see these. They are Running, pollers are healthy, nothing has failed and nothing is retrying — only duration is wrong, and no Prometheus counter carries duration for an open execution.\n\nMeasured during `make chaos-stuck`: 0 -> 5 at buckets 1 and 2 while no other alert fired.",
+    thr={"mode": "absolute", "steps": [{"color": GOOD, "value": None},
+                                       {"color": SERIOUS, "value": 1}]},
+    legend_mode="table", legend_place="bottom", fill=16))
+
+P.append(ts("Running executions", {"h": 6, "w": 5, "x": 15, "y": 61},
+    [tgt("sum by (workflow_type) (temporal_slo_running_executions)", legend="{{workflow_type}}")],
+    "short",
+    "Open executions by type. Deliberately NOT alertable on its own: this number scales with business volume, not with health. It is here as the denominator context for the panel to its left.",
+    legend_mode="list", legend_place="bottom", fill=8))
+
+# Two panels about whether the SIGNAL works, not whether the system is healthy.
+# Both exist because this row's failure modes are silent by construction.
+P.append(stat("Poll freshness", {"h": 6, "w": 2, "x": 20, "y": 61},
+    [tgt("time() - max(temporal_slo_last_successful_poll_timestamp_seconds)")],
+    "s",
+    "Age of the newest successful Visibility poll.\n\nTHIS PANEL GUARDS THE ROW. The monitor never publishes a zero when a query fails — it leaves the previous value in place, because a 0 would read as 'nothing is over budget' during exactly the outage when that is least likely to be true. The cost is that a frozen gauge looks perfectly healthy, and this is the only thing that reveals it.",
+    thr={"mode": "absolute", "steps": [{"color": GOOD, "value": None},
+                                       {"color": SERIOUS, "value": 120},
+                                       {"color": CRITICAL, "value": 300}]},
+    decimals=0, novalue="no polls"))
+
+P.append(stat("Server-reported stuck detection", {"h": 6, "w": 2, "x": 22, "y": 61},
+    [tgt('max(temporal_slo_stuck_detection_available{method="reported_problems"})')],
+    "short",
+    "1 = TemporalReportedProblems works here. 0 = it does not, so stuck_executions is NOT PUBLISHED AT ALL.\n\nAbsence rather than zero is deliberate: a stuck_executions gauge sitting at 0 on a server without the attribute is indistinguishable from a clean bill of health. Needs Server 1.30+ and, self-hosted, system.numConsecutiveWorkflowTaskProblemsToTriggerSearchAttribute — so on 1.27.4 this correctly reads 0.\n\nDuration buckets (left) work on every version and remain the primary signal.",
+    thr={"mode": "absolute", "steps": [{"color": SERIOUS, "value": None},
+                                       {"color": GOOD, "value": 1}]},
+    decimals=0, graph="none", novalue="monitor down?"))
+
 dash = {
     "__inputs": [{"name": "DS_PROMETHEUS", "label": "Prometheus", "description": "",
                   "type": "datasource", "pluginId": "prometheus", "pluginName": "Prometheus"}],

@@ -48,6 +48,7 @@ func New(cfg *config.Config, c counter.Counter, m *metrics.Metrics, log *slog.Lo
 func (mo *Monitor) Run(ctx context.Context) error {
 	for _, wt := range mo.cfg.WorkflowTypes {
 		mo.m.BudgetSeconds.WithLabelValues(wt.Name).Set(wt.Budget.Std().Seconds())
+		mo.m.Objective.WithLabelValues(wt.Name).Set(wt.Objective)
 	}
 
 	mo.probeStuckDetection(ctx)
