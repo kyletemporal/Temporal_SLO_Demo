@@ -107,8 +107,11 @@ func TestDurationPercentiles_MatchesExactWithinTolerance(t *testing.T) {
 			t.Errorf("p%.3f = %v, exact %v, off by %v (tolerance %v)",
 				r.P, r.Duration, want, diff, tol)
 		}
-		if !r.Exact {
+		if !r.Converged {
 			t.Errorf("p%.3f did not converge in %d queries", r.P, r.Queries)
+		}
+		if r.AboveRange {
+			t.Errorf("p%.3f wrongly reported above range", r.P)
 		}
 	}
 }
@@ -175,5 +178,57 @@ func TestDurationPercentiles_RankRoundsUp(t *testing.T) {
 	got := res[0].Duration.Round(time.Second)
 	if got != 99*time.Second {
 		t.Errorf("p99 = %v, want 99s (rank must round up)", got)
+	}
+}
+
+func TestDurationPercentiles_FlagsPercentileAboveSearchRange(t *testing.T) {
+	// If the true p99 is larger than maxDuration, bisection converges silently
+	// on maxDuration and the result is indistinguishable from a measurement.
+	// A budget derived from that is wrong and looks fine, which is the worst
+	// combination.
+	// 98 fast + 2 very slow, so the p99 RANK (99th of 100) lands on a value
+	// outside the search range. With only one slow execution the p99 would be
+	// 1s and legitimately inside the range — the rank is what matters, not the
+	// presence of an outlier.
+	var ds []time.Duration
+	for i := 0; i < 98; i++ {
+		ds = append(ds, time.Second)
+	}
+	ds = append(ds, 10*time.Hour, 11*time.Hour)
+
+	f := &fakeCounter{durations: ds}
+	_, res, err := DurationPercentiles(context.Background(), f, "T",
+		30*24*time.Hour, time.Now(), []float64{0.99},
+		time.Minute /* maxDuration far below the real p99 */, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res[0].AboveRange {
+		t.Errorf("p99 = %v with maxDuration 1m: must be flagged AboveRange, not returned as a measurement", res[0].Duration)
+	}
+	if res[0].Converged {
+		t.Error("an out-of-range percentile must not report as converged")
+	}
+}
+
+func TestDurationPercentiles_CeilIsExact(t *testing.T) {
+	// float64 cannot represent 0.99 exactly; `total*p + epsilon` lands on the
+	// wrong side of the boundary for some totals. Check a spread of sizes.
+	for _, n := range []int{100, 200, 300, 700, 1000, 1001} {
+		ds := make([]time.Duration, n)
+		for i := range ds {
+			ds[i] = time.Duration(i+1) * time.Millisecond
+		}
+		f := &fakeCounter{durations: ds}
+		_, res, err := DurationPercentiles(context.Background(), f, "T",
+			30*24*time.Hour, time.Now(), []float64{0.99},
+			2*time.Second, time.Millisecond/2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := exactPercentile(ds, 0.99)
+		if res[0].Duration.Round(time.Millisecond) != want {
+			t.Errorf("n=%d: p99 = %v, want %v", n, res[0].Duration.Round(time.Millisecond), want)
+		}
 	}
 }

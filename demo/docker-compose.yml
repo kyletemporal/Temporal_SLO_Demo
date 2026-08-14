@@ -1,3 +1,15 @@
+# name is set below; every image tag is overridable so you can run this against
+# whatever Temporal version you actually need to reproduce.
+#
+#   TEMPORAL_VERSION=1.27.4 ./deploy.sh --clean     # or edit .env
+#
+# Defaults live in the ${VAR:-default} expressions, so no .env file is required.
+# See .env.example for the full list and the version caveats.
+#
+# CHANGING THE VERSION REQUIRES A CLEAN START. The database schema is written by
+# auto-setup at first boot and is version-specific; pointing a new server at an
+# old schema fails in confusing ways. Always use --clean when switching.
+#
 name: temporal-obs-demo
 
 services:
@@ -5,7 +17,7 @@ services:
   # Persistence
   # ---------------------------------------------------------------------------
   postgresql:
-    image: postgres:16-alpine
+    image: postgres:${POSTGRES_VERSION:-16-alpine}
     container_name: tobs-postgres
     environment:
       POSTGRES_USER: temporal
@@ -27,7 +39,7 @@ services:
   # identical either way, but prometheus.yml would list four targets.
   # ---------------------------------------------------------------------------
   temporal:
-    image: temporalio/auto-setup:1.26.2
+    image: temporalio/auto-setup:${TEMPORAL_VERSION:-1.27.4}
     container_name: tobs-temporal
     depends_on:
       postgresql:
@@ -59,7 +71,7 @@ services:
     networks: [tobs]
 
   temporal-ui:
-    image: temporalio/ui:2.34.0
+    image: temporalio/ui:${TEMPORAL_UI_VERSION:-2.53.3}
     container_name: tobs-temporal-ui
     depends_on:
       temporal:
@@ -116,7 +128,7 @@ services:
   # Observability
   # ---------------------------------------------------------------------------
   prometheus:
-    image: prom/prometheus:v3.1.0
+    image: prom/prometheus:${PROMETHEUS_VERSION:-v3.1.0}
     container_name: tobs-prometheus
     volumes:
       - ./prometheus:/etc/prometheus:ro
@@ -138,7 +150,7 @@ services:
     networks: [tobs]
 
   grafana:
-    image: grafana/grafana:11.5.1
+    image: grafana/grafana:${GRAFANA_VERSION:-11.5.1}
     container_name: tobs-grafana
     depends_on: [prometheus]
     environment:
@@ -159,7 +171,7 @@ services:
   #   docker compose run --rm k6 run /scripts/01-backlog-storm.js
   # ---------------------------------------------------------------------------
   k6:
-    image: grafana/k6:0.55.0
+    image: grafana/k6:${K6_VERSION:-0.55.0}
     profiles: [tools]
     volumes:
       - ./k6:/scripts:ro

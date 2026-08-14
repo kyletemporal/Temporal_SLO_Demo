@@ -6,6 +6,7 @@ package config
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -166,6 +167,15 @@ func (c *Config) Validate() error {
 		}
 		if w.Owner == "" {
 			return fmt.Errorf("workflow_types[%s].owner is required: it routes the alert", w.Name)
+		}
+		// budget-derive emits placeholders on purpose. Refusing to load them is
+		// what makes "review before use" a guarantee rather than a comment
+		// nobody read — an unreviewed config must not be able to page anyone.
+		if strings.HasPrefix(strings.ToUpper(w.Owner), "TODO") {
+			return fmt.Errorf("workflow_types[%s].owner is still the generated placeholder %q: set a real owner before loading this config", w.Name, w.Owner)
+		}
+		if strings.HasPrefix(strings.ToUpper(string(w.Budget.String())), "REPLACE_ME") {
+			return fmt.Errorf("workflow_types[%s] has an unresolved budget placeholder", w.Name)
 		}
 	}
 	return nil

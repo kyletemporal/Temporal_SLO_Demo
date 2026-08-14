@@ -3,6 +3,7 @@ package visibility
 import (
 	"context"
 	"fmt"
+	"math"
 	"time"
 )
 
@@ -15,11 +16,20 @@ type Counter interface {
 }
 
 // PercentileResult is one derived percentile plus the evidence behind it.
+//
+// Converged and AboveRange exist so a caller can tell a trustworthy number from
+// a clamped one. Without them, a percentile that fell outside the search range
+// comes back looking like an ordinary answer and silently becomes a budget.
 type PercentileResult struct {
 	P        float64
 	Duration time.Duration
-	Queries  int  // count calls spent finding it
-	Exact    bool // false when the search hit its iteration cap
+	Queries  int
+	// Converged is false when the search hit its iteration cap before reaching
+	// tolerance. The value is a bound, not an answer.
+	Converged bool
+	// AboveRange is true when the real percentile is LARGER than maxDuration.
+	// Duration is then only a lower bound and must not be used as a budget.
+	AboveRange bool
 }
 
 // DurationPercentiles derives percentiles of ExecutionDuration by BINARY
@@ -61,9 +71,12 @@ func DurationPercentiles(
 	}
 
 	for _, p := range percentiles {
-		// Rank of the target execution, 1-based. ceil(p * total) so p99 of 100
-		// executions is the 99th, not the 98th.
-		target := int64(float64(total)*p + 0.999999)
+		// Rank of the target execution, 1-based, rounded UP: p99 of 100
+		// executions is the 99th, not the 98th. math.Ceil rather than an
+		// epsilon fudge — float64 cannot represent 0.99 exactly, and
+		// `total*p + 0.999999` lands on the wrong side of the boundary for
+		// some totals.
+		target := int64(math.Ceil(float64(total) * p))
 		if target < 1 {
 			target = 1
 		}
@@ -71,14 +84,28 @@ func DurationPercentiles(
 			target = total
 		}
 
+		// Does the answer even lie inside the search range? Without this
+		// check, a percentile above maxDuration converges silently to
+		// maxDuration and is indistinguishable from a real measurement.
+		atMax, cerr := c.Count(ctx, ClosedDurationAtMost(workflowType, maxDuration, lookback, now))
+		queries := 1
+		if cerr != nil {
+			return total, nil, fmt.Errorf("percentile %.4f range probe: %w", p, cerr)
+		}
+		if atMax < target {
+			results = append(results, PercentileResult{
+				P: p, Duration: maxDuration, Queries: queries,
+				Converged: false, AboveRange: true,
+			})
+			continue
+		}
+
 		lo, hi := time.Duration(0), maxDuration
-		queries := 0
-		exact := false
+		converged := false
 
 		for hi-lo > tolerance {
-			// Guard against a pathological range producing thousands of calls.
 			if queries >= 40 {
-				break
+				break // pathological range; report as unconverged rather than guessing
 			}
 			mid := lo + (hi-lo)/2
 			n, cerr := c.Count(ctx, ClosedDurationAtMost(workflowType, mid, lookback, now))
@@ -87,20 +114,15 @@ func DurationPercentiles(
 				return total, nil, fmt.Errorf("percentile %.4f search: %w", p, cerr)
 			}
 			if n >= target {
-				hi = mid // enough executions at or below mid; the answer is <= mid
+				hi = mid
 			} else {
-				lo = mid // not enough; the answer is above mid
-			}
-			if hi-lo <= tolerance {
-				exact = true
+				lo = mid
 			}
 		}
+		converged = hi-lo <= tolerance
 
 		results = append(results, PercentileResult{
-			P:        p,
-			Duration: hi,
-			Queries:  queries,
-			Exact:    exact,
+			P: p, Duration: hi, Queries: queries, Converged: converged,
 		})
 	}
 	return total, results, nil

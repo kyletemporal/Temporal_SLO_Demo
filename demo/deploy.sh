@@ -36,6 +36,32 @@ docker compose version >/dev/null 2>&1 || die "docker compose v2 not available"
 command -v python3 >/dev/null || die "python3 not found (used by verify/validate)"
 ok "docker $(docker version --format '{{.Server.Version}}'), compose $(docker compose version --short)"
 
+# ---------------------------------------------------------------------------
+# Which Temporal are we about to run?
+#
+# Every image tag is overridable (see .env.example). Surface the resolved
+# version rather than leaving people to guess from a compose file, and refuse
+# the versions that cannot work rather than failing later with an image pull
+# error nobody can interpret.
+# ---------------------------------------------------------------------------
+[ -f .env ] && set -a && . ./.env && set +a
+TEMPORAL_VERSION="${TEMPORAL_VERSION:-1.27.4}"
+ok "Temporal ${TEMPORAL_VERSION}  (override: TEMPORAL_VERSION=x.y.z ./deploy.sh --clean)"
+
+ver_major=$(echo "$TEMPORAL_VERSION" | cut -d. -f1)
+ver_minor=$(echo "$TEMPORAL_VERSION" | cut -d. -f2)
+if [ "$ver_major" = 1 ] && [ "${ver_minor:-0}" -ge 30 ] 2>/dev/null; then
+  die "temporalio/auto-setup does not exist for 1.30+. That image line stopped at
+         1.29.7. Running $TEMPORAL_VERSION needs temporalio/server plus
+         temporalio/admin-tools for schema setup — a different compose topology.
+         Pick <= 1.29.7 here, or use the production/ bundle against a real cluster."
+fi
+if [ "$ver_major" = 1 ] && [ "${ver_minor:-0}" -lt 30 ] 2>/dev/null; then
+  printf "    \033[33mnote\033[0m  TemporalReportedProblems (the definitive stuck-workflow signal)\n"
+  printf "          arrived in 1.30, so it is unavailable on %s. Stuck detection\n" "$TEMPORAL_VERSION"
+  printf "          falls back to workflow_task_execution_failed + the age ladder.\n"
+fi
+
 # Ports must be free, unless it is our own stack already holding them.
 #
 # lsof is absent from many Linux images, and `lsof … >/dev/null 2>&1` exits
