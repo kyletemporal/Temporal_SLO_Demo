@@ -327,11 +327,22 @@ fi
 # -----------------------------------------------------------------------------
 hdr "7. SLO board state"
 # -----------------------------------------------------------------------------
-curl -sf "$PROM/api/v1/query" --data-urlencode 'query=slo:error_budget_remaining:ratio' 2>/dev/null | python3 -c "
+# The verdict is emitted by the SHELL, not printed inside Python.
+#
+# This section used to print its own PASS/WARN/FAIL text from within the heredoc,
+# which bypassed ok()/warn()/bad() entirely — so the summary line reported
+# "warnings: 0" while a WARN was plainly visible on screen. A summary that does
+# not count what it displays is its own silent failure, in a script whose whole
+# job is catching those. Python now reports a verdict on a marker line and the
+# shell does the accounting.
+slo_out="$(curl -sf "$PROM/api/v1/query" --data-urlencode 'query=slo:error_budget_remaining:ratio' 2>/dev/null | python3 -c "
 import json,sys
-r=json.load(sys.stdin)['data']['result']
+try:
+    r=json.load(sys.stdin)['data']['result']
+except Exception:
+    print('__VERDICT__:unreadable'); sys.exit(0)
 if not r:
-    print('  \033[31m FAIL\033[0m  no SLO series — generate traffic, then wait ~60s'); sys.exit(1)
+    print('__VERDICT__:empty'); sys.exit(0)
 print(f\"    {'SLI':28} {'ROLE':10} {'BUDGET LEFT':>12}\")
 neg=[]
 for m in sorted(r, key=lambda x: x['metric'].get('sli','')):
@@ -340,9 +351,16 @@ for m in sorted(r, key=lambda x: x['metric'].get('sli','')):
     print(f'    {sli:28} {svc:10} {s}')
     if v==v and v<=0: neg.append(sli)
 print()
-if neg: print(f'  \033[33m WARN\033[0m  budget exhausted: {sorted(set(neg))} (expected after a chaos run)')
-else:   print('  \033[32m PASS\033[0m  every SLO within budget')
-" || bad "could not read SLO series"
+print('__VERDICT__:exhausted:'+','.join(sorted(set(neg))) if neg else '__VERDICT__:ok')
+")"
+printf '%s\n' "$slo_out" | grep -v '^__VERDICT__' || true
+slo_verdict="$(printf '%s\n' "$slo_out" | grep '^__VERDICT__' | head -1)"
+case "$slo_verdict" in
+  __VERDICT__:ok)          ok "every SLO within budget" ;;
+  __VERDICT__:exhausted:*) warn "budget exhausted: ${slo_verdict#__VERDICT__:exhausted:} (expected after a chaos run)" ;;
+  __VERDICT__:empty)       bad "no SLO series — generate traffic, then wait ~60s" ;;
+  *)                       bad "could not read SLO series" ;;
+esac
 
 # -----------------------------------------------------------------------------
 hdr "8. Alert state"

@@ -379,3 +379,20 @@ scenario for an alert it did not cause.
 
 Cleanup: `make chaos-stuck-release` (batch Signal + batch terminate). Required —
 these Workflows have no timeout and will otherwise run until the stack is torn down.
+
+---
+
+## Validator was under-reporting its own warnings (2026-08-14)
+
+`validate.sh` section 7 printed its own `PASS`/`WARN`/`FAIL` text from **inside a
+Python heredoc**, bypassing `ok()`/`warn()`/`bad()` entirely. The summary read
+`warnings: 0` while a WARN was plainly on screen two lines above it.
+
+A summary that does not count what it displays is its own silent failure — in the
+script whose entire job is catching those. Python now emits a `__VERDICT__:`
+marker line and the shell does the accounting. Correct output is
+`passed: 32  failed: 0  warnings: 1`, the warning being `worker_task_delivery`
+budget exhausted, which is expected after a session of chaos runs.
+
+Worth checking whenever a new section is added: if a check prints its own
+verdict, it is not being counted.
