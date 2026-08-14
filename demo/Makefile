@@ -131,6 +131,52 @@ scale-reset: ## Back to 1 worker
 # Expect: TemporalNonDeterminismError fires, TMPRL1100 appears in the worker
 # logs with WorkflowID and RunID, and the "Find stuck executions" panel names
 # the affected executions.
+.PHONY: chaos-stuck
+chaos-stuck: ## [6] Stuck Workflows — the case no metric can see
+	@echo "==> 3 PARKED workflows (await a signal that never arrives)"
+	@for i in 1 2 3; do curl -sf -X POST localhost:8081/orders -H 'Content-Type: application/json' \
+	  -d "{\"orderId\":\"stuck-parked-$$i\",\"stuckMode\":\"parked\",\"activityDelayMs\":50,\"maxAttempts\":3,\"wait\":false}" >/dev/null || true; done
+	@echo "==> 2 RETRY-STORM workflows (unlimited retries, never fail, never finish)"
+	@for i in 1 2; do curl -sf -X POST localhost:8081/orders -H 'Content-Type: application/json' \
+	  -d "{\"orderId\":\"stuck-storm-$$i\",\"stuckMode\":\"retry-storm\",\"activityDelayMs\":50,\"wait\":false}" >/dev/null || true; done
+	@echo
+	@echo "WHAT TO EXPECT — this is the point of the scenario:"
+	@echo
+	@echo "  PARKED:      NOTHING fires, and nothing ever will. The Workflows are"
+	@echo "               Running: pollers healthy, zero errors, zero retries,"
+	@echo "               slots free. They move NO Prometheus counter, because"
+	@echo "               every counter here (workflow_success / _failed /"
+	@echo "               _timeout) describes a Workflow that ENDED. One that"
+	@echo "               never ends increments nothing. Only DURATION is wrong,"
+	@echo "               and no metric carries it — this is exactly why"
+	@echo "               monitor/ polls Visibility instead."
+	@echo
+	@echo "  RETRY-STORM: Activity failure rate climbs, so this one IS visible."
+	@echo "               But the Workflow never fails, so workflow_failed stays"
+	@echo "               flat and the failure-ratio alert never fires. It burns"
+	@echo "               Actions indefinitely while looking like a retry blip."
+	@echo
+	@echo "  NOTE: these run with NO WorkflowExecutionTimeout, unlike every other"
+	@echo "  scenario here (which caps at 10m). That is deliberate. An execution"
+	@echo "  timeout CONVERTS an invisible stuck Workflow into a visible timed-out"
+	@echo "  one — measured: with the 10m cap these ended TimedOut and burned"
+	@echo "  error budget within minutes. Setting one is a real mitigation;"
+	@echo "  Temporal's default is no timeout, and this shows that exposure."
+	@echo
+	@echo "  Pre-existing burn alerts from earlier chaos may already be firing."
+	@echo "  Check activeAt before attributing anything to this scenario."
+	@echo
+	@echo "Clean up:    make chaos-stuck-release"
+
+.PHONY: chaos-stuck-release
+chaos-stuck-release: ## Release parked Workflows and terminate retry storms
+	@docker exec tobs-temporal sh -c 'A=$$(hostname -i):7233; \
+	  temporal workflow signal --address $$A --name resume --input null \
+	    --query "ExecutionStatus='"'"'Running'"'"' AND WorkflowId STARTS_WITH '"'"'order-stuck-parked'"'"'" --yes' 2>&1 | tail -1
+	@docker exec tobs-temporal sh -c 'A=$$(hostname -i):7233; \
+	  temporal workflow terminate --address $$A --reason "lab cleanup" \
+	    --query "ExecutionStatus='"'"'Running'"'"' AND WorkflowId STARTS_WITH '"'"'order-stuck-storm'"'"'" --yes' 2>&1 | tail -1
+
 .PHONY: chaos-nde
 chaos-nde:
 	@echo "==> starting long-running workflows"

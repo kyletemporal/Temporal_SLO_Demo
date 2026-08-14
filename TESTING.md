@@ -345,3 +345,37 @@ actual on this stack is 0.000000%, so the tighter value would be quiet — but i
 is a paging decision across three bundles, so it is flagged rather than switched.
 Not implemented: failure-conversion-rate (`workflow_failed / activity_execution_failed`,
 >0.1 poor / <0.01 good).
+
+---
+
+## `make chaos-stuck` — stuck Workflows (2026-08-14)
+
+The lab had no scenario for the silent case. `chaos-orphan`, `chaos-blackout` and
+`chaos-nde` all stall Workflows, but each trips an alert. Nothing exercised the
+`monitor/` service's whole reason for existing.
+
+Two modes:
+
+- **`parked`** — awaits a Signal that never arrives. Verified over 25+ minutes:
+  `workflow_success`, `workflow_failed`, `workflow_timeout` and `no_poller_tasks`
+  all stayed at **0.0000**. Nothing fires, and nothing will. Every Prometheus
+  counter here describes a Workflow that ENDED; one that never ends increments
+  nothing.
+- **`retry-storm`** — unlimited retries on an always-failing Activity. Visible as
+  0.2/s activity failures, but `workflow_failed` stays flat, so the failure-ratio
+  alert never fires while Actions burn indefinitely.
+
+**The first version of this scenario taught the opposite of the truth.** The lab
+sets `WorkflowExecutionTimeout: 10m` on every Workflow, so parked executions ended
+**TimedOut** and burned error budget within minutes — measured, alerts firing.
+An execution timeout *converts* an invisible stuck Workflow into a visible failed
+one. `StuckMode` now runs with no execution timeout, which is Temporal's default
+and the real exposure. Both generations are visible side by side in one query:
+the capped run `TimedOut`, the uncapped run still `Running` at 25 minutes.
+
+Attribution caveat learned here: burn alerts were already firing from the earlier
+NDE experiment's timeouts an hour prior. Check `activeAt` before crediting a
+scenario for an alert it did not cause.
+
+Cleanup: `make chaos-stuck-release` (batch Signal + batch terminate). Required —
+these Workflows have no timeout and will otherwise run until the stack is torn down.

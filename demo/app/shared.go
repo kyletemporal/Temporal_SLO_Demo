@@ -8,6 +8,9 @@ import (
 // OrderInput carries the chaos levers into the Workflow. Every field here maps
 // to a failure mode that shows up on a specific dashboard panel — see
 // docs/CHAOS-RUNBOOK.md for which lever moves which panel.
+// StuckReleaseSignal releases a Workflow parked by StuckMode="parked".
+const StuckReleaseSignal = "resume"
+
 type OrderInput struct {
 	OrderID string `json:"orderId"`
 
@@ -20,6 +23,22 @@ type OrderInput struct {
 	// Activity slot open, which is how you drive temporal_worker_task_slots_available
 	// to zero without needing real load.
 	ActivityDelayMs int `json:"activityDelayMs"`
+
+	// StuckMode stalls the Workflow in a specific, named way. Empty means
+	// normal execution.
+	//
+	//   "parked"      Blocks forever on a Signal the lab never sends. The
+	//                 Workflow is Running, pollers are healthy, nothing has
+	//                 failed and nothing is retrying. THIS IS THE INVISIBLE
+	//                 CASE: no metric moves and no alert fires, which is
+	//                 precisely why external duration monitoring exists.
+	//                 Release it with `make chaos-stuck-release`.
+	//
+	//   "retry-storm" An Activity that fails on every attempt with UNLIMITED
+	//                 retries. The Workflow never fails and never finishes;
+	//                 it burns Actions forever. Visible as a rising Activity
+	//                 failure rate long before anything else notices.
+	StuckMode string `json:"stuckMode"`
 
 	// MaxAttempts caps the Activity retry policy. Set to 1 to make Activity
 	// failures convert straight into Workflow failures (a deliberately bad

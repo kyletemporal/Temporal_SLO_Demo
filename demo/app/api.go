@@ -79,6 +79,27 @@ func runAPI() {
 			WorkflowExecutionTimeout: 10 * time.Minute,
 		}
 
+		// StuckMode runs with NO execution timeout, and that is the whole point.
+		//
+		// With the 10-minute cap above, a "stuck" Workflow is invisible for ten
+		// minutes and then TIMES OUT — which increments workflow_timeout, counts
+		// as bad in the workflow_completion SLI, burns error budget, and fires
+		// the burn alerts. Measured: parked Workflows ended TimedOut and the SLO
+		// alerts fired.
+		//
+		// That would teach the OPPOSITE of the truth. An execution timeout is
+		// what CONVERTS an invisible stuck Workflow into a visible failed one,
+		// and Temporal's default is no execution timeout at all. The genuinely
+		// undetectable case — the one the Visibility monitor exists for — is a
+		// Workflow that is Running, healthy, and simply never ends.
+		//
+		// So: an execution timeout is a good idea, and setting one is a real
+		// mitigation. This scenario removes it to demonstrate what you are
+		// exposed to when you do not.
+		if req.StuckMode != "" {
+			opts.WorkflowExecutionTimeout = 0
+		}
+
 		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 		defer cancel()
 

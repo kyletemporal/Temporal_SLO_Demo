@@ -60,6 +60,43 @@ func OrderWorkflow(ctx workflow.Context, in OrderInput) (string, error) {
 	if err := workflow.ExecuteActivity(ctx, ValidateOrder, in).Get(ctx, &result); err != nil {
 		return "", fmt.Errorf("validation failed: %w", err)
 	}
+
+	// CHAOS: stuck-workflow chaos. Lab use only. See OrderInput.StuckMode.
+	//
+	// Placed AFTER the first Activity on purpose: a Workflow that stalls before
+	// doing any work is easy to spot, whereas one that makes progress and then
+	// stops is the realistic shape — an approval that never arrives, a callback
+	// that never fires.
+	switch in.StuckMode {
+	case "parked":
+		// The signal never comes. This is the case no metric can see: the
+		// Workflow is healthy in every dimension the platform measures, and
+		// only its DURATION is wrong.
+		logger.Info("parked awaiting resume signal", "orderID", in.OrderID)
+		var sig string
+		workflow.GetSignalChannel(ctx, StuckReleaseSignal).Receive(ctx, &sig)
+		logger.Info("released", "orderID", in.OrderID, "signal", sig)
+
+	case "retry-storm":
+		// MaximumAttempts 0 means unlimited in Temporal. Combined with an
+		// Activity that always fails, this Workflow neither completes nor
+		// fails — it retries until someone intervenes, consuming Actions the
+		// whole time.
+		stormCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+			StartToCloseTimeout: activityStartToClose * time.Second,
+			RetryPolicy: &temporal.RetryPolicy{
+				InitialInterval:    time.Second,
+				BackoffCoefficient: 1.5,
+				MaximumInterval:    10 * time.Second,
+				MaximumAttempts:    0,
+			},
+		})
+		storm := in
+		storm.FailureRate = 1.0
+		if err := workflow.ExecuteActivity(stormCtx, ChargePayment, storm).Get(ctx, &result); err != nil {
+			return "", fmt.Errorf("retry storm ended: %w", err)
+		}
+	}
 	if err := workflow.ExecuteActivity(ctx, ChargePayment, in).Get(ctx, &result); err != nil {
 		return "", fmt.Errorf("payment failed: %w", err)
 	}
