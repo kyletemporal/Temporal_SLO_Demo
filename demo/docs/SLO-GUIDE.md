@@ -335,3 +335,27 @@ outcome once there is one. The signal that catches this immediately is
 `no_poller_tasks` — cluster-side, instant, and the reason
 `TemporalTasksWithNoPoller` exists as a plain threshold alert alongside the
 budgets. Not everything worth paging on is expressible as an error budget.
+
+---
+
+## The failure your SLIs cannot see
+
+Every SLI in this bundle is built from Prometheus counters, and every one of
+those counters describes a Workflow that **ended** — `workflow_success`,
+`workflow_failed`, `workflow_timeout`.
+
+A Workflow that never ends increments none of them. It is `Running`, its pollers
+are healthy, nothing has failed and nothing is retrying, and your compliance
+number is unaffected while the business outcome never happens.
+
+Prove it: `make chaos-stuck`, then watch the board not move. Release with
+`make chaos-stuck-release`.
+
+Two consequences worth carrying into a real deployment:
+
+1. **Set a `WorkflowExecutionTimeout`.** It converts an invisible stuck execution
+   into a visible timed-out one that your SLI already counts as bad. Temporal's
+   default is no timeout.
+2. **Duration SLOs need Visibility, not Prometheus.** Measuring "did this finish
+   within its budget" over open executions is what [`monitor/`](../../monitor/)
+   is for. Note its status table — the service itself is not built yet.

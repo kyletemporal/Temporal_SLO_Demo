@@ -6,7 +6,7 @@ Four bundles and a toolbox:
 
 | | What it is | Use it to |
 |---|---|---|
-| **`demo/`** | A complete stack that runs on a laptop: Temporal, Postgres, Prometheus, Grafana, a Go app, and five chaos scenarios | *See* what a backlog, a starved Worker and an orphaned Task Queue look like before you meet one at 2am |
+| **`demo/`** | A complete stack that runs on a laptop: Temporal, Postgres, Prometheus, Grafana, a Go app, and seven chaos scenarios | *See* what a backlog, a starved Worker and an orphaned Task Queue look like before you meet one at 2am |
 | **`production/`** | Rules and dashboards for a **self-hosted** cluster, no demo app | Drop into a real self-hosted deployment |
 | **`cloud/`** | Rules and dashboards for **Temporal Cloud**, built on the Cloud SLA | Monitor a Cloud Namespace and build SLOs on top of Temporal's |
 | **`app-team/`** | The **minimum standard** for teams that build Workflows on someone else's Temporal platform | Hand to your clients; enforce with its conformance check |
@@ -49,6 +49,8 @@ and the original **Service & Worker Overview**.
 ```bash
 make validate       # re-run all 26 checks any time
 make chaos-slots    # watch an error budget drain
+make chaos-stuck    # the one where nothing moves — and that IS the finding
+make chaos-stuck-release   # required cleanup
 make help           # everything else
 ```
 

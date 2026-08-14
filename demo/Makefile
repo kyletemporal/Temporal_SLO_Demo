@@ -178,7 +178,7 @@ chaos-stuck-release: ## Release parked Workflows and terminate retry storms
 	    --query "ExecutionStatus='"'"'Running'"'"' AND WorkflowId STARTS_WITH '"'"'order-stuck-storm'"'"'" --yes' 2>&1 | tail -1
 
 .PHONY: chaos-nde
-chaos-nde:
+chaos-nde: ## [7] Non-determinism — the failure Temporal cannot retry past
 	@echo "==> starting long-running workflows"
 	@for i in 1 2 3; do curl -sf -X POST localhost:8081/orders -H 'Content-Type: application/json' \
 	  -d "{\"orderId\":\"nde-$$i\",\"failureRate\":0,\"activityDelayMs\":45000,\"maxAttempts\":3,\"wait\":false}" >/dev/null || true; done
@@ -192,6 +192,6 @@ chaos-nde:
 	@echo "==> wait ~90s, then: make chaos-nde-stop"
 
 .PHONY: chaos-nde-stop
-chaos-nde-stop:
+chaos-nde-stop: ## Restore the normal Worker after chaos-nde
 	@docker rm -f $$(docker ps -q --filter "ancestor=temporal-obs-demo-worker") >/dev/null 2>&1 || true
 	@docker compose up -d worker >/dev/null && echo "normal worker restored"

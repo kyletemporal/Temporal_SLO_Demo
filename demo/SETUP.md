@@ -269,6 +269,45 @@ Every scenario except `chaos-blackout` accepts a shorter run:
 docker compose --profile tools run --rm -e DURATION=60s k6 run /scripts/03-orphan-queue.js
 ```
 
+### Scenario 6 — stuck Workflows (`make chaos-stuck`)
+
+The one scenario where **the dashboards stay green and that is the finding**.
+
+Starts Workflows that park on a Signal that never arrives, plus two that retry an
+always-failing Activity forever. Verified over 25+ minutes: no completion counter
+moves at all, because every Prometheus counter here describes a Workflow that
+*ended*. Only duration is wrong, and nothing exports duration for an open
+execution.
+
+These run with **no execution timeout** (Temporal's default) so the exposure is
+real, which means cleanup is not optional:
+
+```bash
+make chaos-stuck
+# ... look at the board, note that nothing has changed ...
+make chaos-stuck-release     # REQUIRED — otherwise they run until teardown
+```
+
+### Scenario 7 — non-determinism (`make chaos-nde`)
+
+Starts long-running Workflows, then swaps in Worker code that issues a command
+their histories do not contain. Replay diverges and the Workflow Task fails
+forever — the one failure Temporal cannot retry past.
+
+```bash
+make chaos-nde
+# wait ~90s
+make chaos-nde-stop          # restores the normal Worker
+```
+
+Expect `TemporalNonDeterminismError` to fire, and `[TMPRL1100]` in the Worker
+logs carrying `WorkflowID` and `RunID`. The Grafana **Find stuck executions**
+panel links each ID straight into the Temporal UI.
+
+One caveat this scenario prints itself: the replacement Worker is started with
+`docker compose run`, so it is **not** a Prometheus scrape target. Read the NDE
+from its `/metrics` or from the logs, not from the dashboards.
+
 **Reset between scenarios**, or you will read the tail of the previous one:
 
 ```bash

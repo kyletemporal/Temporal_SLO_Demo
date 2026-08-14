@@ -19,10 +19,12 @@ Run them in order. Scenario 0 is not optional.
 | 3 | Orphan queue | `make chaos-orphan` | Task Queue name mismatch | no-poller tasks ↑ **only** |
 | 4 | Slot saturation | `make chaos-slots` | concurrency limit set too low | slots → 0, schedule-to-start ↑, load stays LOW |
 | 5 | Worker blackout | `make chaos-blackout` | Worker fleet down | SDK panels go **blank**, cluster panels go red |
+| 6 | Stuck Workflows | `make chaos-stuck` | parked forever / infinite retry | **parked: NOTHING moves.** retry-storm: activity failures ↑ only |
+| 7 | Non-determinism | `make chaos-nde` | Workflow code changed under open executions | NDE alert fires, `TMPRL1100` in logs with WorkflowID |
 
 ---
 
-## The three lessons worth landing
+## The four lessons worth landing
 
 ### 1. Two panels, one signal, two different fixes
 
@@ -103,6 +105,37 @@ curve is usually the most persuasive thirty seconds of the whole demo.
 
 ---
 
+### 4. Some failures move no metric at all
+
+`make chaos-stuck` starts Workflows that park on a Signal that never arrives.
+They are `Running`, pollers are healthy, no errors, nothing retrying, slots free.
+
+Measured over 25+ minutes: `workflow_success`, `workflow_failed`,
+`workflow_timeout` and `no_poller_tasks` all stayed at **0.0000**. Every
+dashboard stays green while the business outcome never happens. This is the
+"I thought something was going to happen but it didn't" page.
+
+The reason is structural, not a gap in the dashboards: **every Prometheus counter
+here describes a Workflow that ENDED.** One that never ends increments nothing.
+Only its DURATION is wrong, and no metric carries duration for an open execution.
+That is the entire argument for querying Visibility — see [`monitor/`](../../monitor/).
+
+Two things to say out loud when demoing this:
+
+- **An execution timeout converts this into a visible failure.** The lab caps
+  normal Workflows at 10m, and with that cap these ended `TimedOut` and burned
+  error budget within minutes. `chaos-stuck` deliberately runs with **no**
+  execution timeout, which is Temporal's default, to show the real exposure.
+  Setting one is a genuine mitigation.
+- **The retry-storm variant is the near-miss.** Activity failures climb, so it
+  looks detected — but `workflow_failed` stays flat, so the failure-ratio alert
+  never fires while Actions burn indefinitely.
+
+Cleanup is **required**: `make chaos-stuck-release`. With no execution timeout
+these run until the stack is torn down.
+
+---
+
 ## Suggested 30-minute demo flow
 
 | Time | Action | Talking point |
@@ -113,6 +146,7 @@ curve is usually the most persuasive thirty seconds of the whole demo.
 | 0:17 | `make chaos-backlog`, then `make scale-up` mid-run | Signal → action → recovery, closed loop |
 | 0:24 | `make chaos-slots` + `docker stats` | Why "add more Workers" is often wrong |
 | 0:28 | `make chaos-blackout` | Absent Workers emit no metrics |
+| 0:32 | `make chaos-stuck` (then release) | Some failures move **no** metric at all — why Visibility polling exists |
 
 Scenario 2 is worth its own session if the audience owns application code
 rather than infrastructure.
