@@ -6,6 +6,7 @@ global:
 
 rule_files:
   - /etc/prometheus/alerts.yml
+  - /etc/prometheus/monitor-rules.yml
   # SLI recording rules, error budgets, and burn-rate alerts. Kept separate
   # from alerts.yml because the two answer different questions: alerts.yml is
   # "is something broken right now", slo-rules.yml is "are we still meeting
@@ -69,3 +70,9 @@ scrape_configs:
   - job_name: prometheus
     static_configs:
       - targets: ["localhost:9090"]
+
+  # The Workflow SLO monitor. Its series are temporal_slo_* and are the only
+  # duration-based view of OPEN executions in this stack.
+  - job_name: slo-monitor
+    static_configs:
+      - targets: ['slo-monitor:9111']

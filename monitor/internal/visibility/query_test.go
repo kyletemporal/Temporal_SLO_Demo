@@ -164,3 +164,31 @@ func TestClosedDurationAtMost_ForPercentileSearch(t *testing.T) {
 		t.Errorf("30d lookback wrong: %s", got)
 	}
 }
+
+func TestStuckByCause_NarrowsToOneCause(t *testing.T) {
+	q := StuckByCause("OrderWorkflow", "orders", "category=WorkflowTaskFailed")
+
+	if !strings.Contains(q, "TemporalReportedProblems = 'category=WorkflowTaskFailed'") {
+		t.Fatalf("expected equality on the single cause, got: %s", q)
+	}
+	// The aggregate form uses IN(...). If StuckByCause ever regresses to that,
+	// every cause series would report the same total and the label would be a
+	// lie that looks like data.
+	if strings.Contains(q, "IN (") {
+		t.Fatalf("StuckByCause must not use the IN form: %s", q)
+	}
+	if !strings.Contains(q, "ExecutionStatus = 'Running'") {
+		t.Fatalf("stuck executions must still be open: %s", q)
+	}
+}
+
+func TestStuckByCause_CoversEveryDeclaredCause(t *testing.T) {
+	// Guards against a cause being added to ReportedProblemCauses without the
+	// per-cause path being able to express it.
+	for _, c := range ReportedProblemCauses {
+		q := StuckByCause("W", "", c)
+		if !strings.Contains(q, quote(c)) {
+			t.Errorf("cause %q not representable: %s", c, q)
+		}
+	}
+}

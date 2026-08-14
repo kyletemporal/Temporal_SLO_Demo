@@ -233,6 +233,30 @@ services:
       - "12345:12345"
     networks: [tobs]
 
+  # ---------------------------------------------------------------------------
+  # Workflow SLO monitor
+  #
+  # Answers the one question Prometheus structurally cannot: is an OPEN execution
+  # past its duration budget? Every Temporal workflow-outcome metric is a counter
+  # over executions that ENDED, so a Workflow stuck forever increments nothing.
+  # Prove the gap with `make chaos-stuck`, then watch this service's
+  # over_budget_executions climb while every alert stays silent.
+  # ---------------------------------------------------------------------------
+  slo-monitor:
+    build: ../monitor
+    container_name: tobs-slo-monitor
+    depends_on:
+      temporal:
+        condition: service_healthy
+    command:
+      - -config=/etc/monitor/slo-config.yaml
+      - -listen=:9111
+    volumes:
+      - ../monitor/slo-config.demo.yaml:/etc/monitor/slo-config.yaml:ro
+    ports:
+      - "9111:9111"
+    networks: [tobs]
+
 networks:
   tobs:
     driver: bridge

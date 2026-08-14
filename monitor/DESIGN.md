@@ -124,8 +124,17 @@ slo:workflow_compliance:ratio28d =
       temporal_slo_closed_in_budget
     / ( temporal_slo_closed_in_budget
       + temporal_slo_closed_over_budget
-      + temporal_slo_over_budget_executions{bucket="1"} )
+      + sum without(bucket) (temporal_slo_over_budget_executions{bucket="1"}) )
 ```
+
+**`sum without(bucket)` is not cosmetic.** `over_budget_executions` carries a
+`bucket` label that the two closed gauges do not, and Prometheus binary
+operators require identical label sets — so the obvious form of this expression
+(which this document published until it was run against a live stack) matches
+nothing and returns **empty**, not a wrong number. An SLI that silently
+evaluates to no data is worse than one that is wrong, because no dashboard
+panel and no burn-rate alert will tell you it is missing. Verified: without the
+`sum without(bucket)` the query is empty; with it, 79.3336%.
 
 `bucket="1"` is precisely "still running past 1× budget". An open workflow past
 budget is **already** a violation and can never become compliant, so it belongs

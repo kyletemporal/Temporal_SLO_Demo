@@ -1,0 +1,33 @@
+# REVIEWED config for the demo stack.
+#
+# Separate from slo-config.generated.yaml on purpose: the generated file carries
+# TODO placeholders and is REJECTED at load time by design, so that unreviewed
+# budgets can never start the service. This file is what a reviewed one looks
+# like after a human has answered the questions budget-derive asks.
+#
+# The budget below is NOT derived from a p99. It is deliberately short so
+# `make chaos-stuck` demonstrates the point within a demo rather than an hour:
+# parked Workflows cross 1x budget in 60s and appear in the over-budget ladder
+# while every Prometheus alert stays silent.
+deployment:
+  kind: self-hosted
+  namespace: default
+  address: temporal:7233
+  stuck_detection: auto      # probes TemporalReportedProblems, falls back if absent
+
+defaults:
+  poll_interval: 30s         # demo cadence; MinPollInterval is the floor
+  window_poll_interval: 600s
+  buckets: [1, 2, 5]
+  slo_window: 28d
+  # Terminated and Canceled are in this list on purpose. If terminating a late
+  # Workflow removed it from the denominator, the SLO would improve as the
+  # evidence was destroyed.
+  closed_over_budget_statuses: [Completed, Failed, Canceled, Terminated, TimedOut]
+
+workflow_types:
+  - name: OrderWorkflow
+    task_queue: orders
+    budget: 60s
+    objective: 0.99
+    owner: demo-team

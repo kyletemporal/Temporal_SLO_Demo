@@ -9,6 +9,7 @@ Four bundles and a toolbox:
 | **`demo/`** | A complete stack that runs on a laptop: Temporal, Postgres, Prometheus, Grafana, a Go app, and seven chaos scenarios | *See* what a backlog, a starved Worker and an orphaned Task Queue look like before you meet one at 2am |
 | **`production/`** | Rules and dashboards for a **self-hosted** cluster, no demo app | Drop into a real self-hosted deployment |
 | **`cloud/`** | Rules and dashboards for **Temporal Cloud**, built on the Cloud SLA | Monitor a Cloud Namespace and build SLOs on top of Temporal's |
+| **`monitor/`** | A service that polls Visibility for workflow-**duration** SLIs, plus its rules | Detect Workflows stuck or running past budget — the failure metrics structurally cannot see |
 | **`app-team/`** | The **minimum standard** for teams that build Workflows on someone else's Temporal platform | Hand to your clients; enforce with its conformance check |
 | **`tools/`** | Generators for the rule files and dashboards | Regenerate after editing an SLI |
 

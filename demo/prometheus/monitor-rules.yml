@@ -1,0 +1,74 @@
+# Recording rules and alerts for the Workflow SLO monitor (temporal_slo_*).
+#
+# These are separate from slo-rules.yml because they depend on a SERVICE being
+# up, not just on Temporal emitting metrics. If slo-monitor is down, everything
+# here goes stale — which is what MonitorPollsStale exists to catch.
+
+groups:
+  - name: workflow-duration-slo
+    interval: 30s
+    rules:
+      # Compliance over the SLO window.
+      #
+      # sum without(bucket) is LOAD-BEARING: over_budget_executions carries a
+      # `bucket` label the closed gauges do not, and a Prometheus binary operator
+      # needs identical label sets. Without it this expression returns EMPTY, not
+      # a wrong number — an SLI that silently evaluates to nothing, which no panel
+      # or burn alert would report. Measured both ways before shipping.
+      #
+      # The third denominator term is the whole point: an OPEN execution past
+      # budget is already a violation and can never become compliant, so it
+      # belongs in the denominator now. That is what makes terminating a stuck
+      # Workflow NOT improve this number — verified end to end: 5 executions moved
+      # from over_budget{bucket="1"} to closed_over_budget and compliance held at
+      # 0.793336 exactly.
+      - record: slo:workflow_compliance:ratio
+        expr: |
+          temporal_slo_closed_in_budget
+          /
+          clamp_min(
+            temporal_slo_closed_in_budget
+            + temporal_slo_closed_over_budget
+            + sum without(bucket) (temporal_slo_over_budget_executions{bucket="1"}),
+            1
+          )
+
+      - alert: WorkflowsOverBudget
+        expr: sum without(bucket) (temporal_slo_over_budget_executions{bucket="2"}) > 0
+        for: 10m
+        labels:
+          severity: warning
+          component: workflow-slo
+        annotations:
+          summary: "{{ $value }} {{ $labels.workflow_type }} executions running past 2x budget"
+          description: "These are OPEN executions that have exceeded twice their duration budget. No other alert in this stack can see them: every Temporal workflow-outcome metric is a counter over executions that ENDED. Find them with a Visibility query on ExecutionStatus='Running' and StartTime, or the Find stuck executions log panel."
+
+      # The staleness guard, and it is not optional.
+      #
+      # The monitor deliberately does NOT zero its gauges when a Visibility query
+      # fails, because publishing 0 would read as "nothing is over budget" during
+      # an outage. The cost of that choice is that a frozen gauge looks healthy,
+      # so freshness has to be alerted on separately. Without this rule the
+      # no-zeroing design becomes its own silent failure.
+      - alert: MonitorPollsStale
+        expr: time() - temporal_slo_last_successful_poll_timestamp_seconds > 300
+        for: 5m
+        labels:
+          severity: critical
+          component: workflow-slo
+        annotations:
+          summary: "SLO monitor polls are stale for {{ $labels.workflow_type }} ({{ $labels.query_kind }})"
+          description: "Visibility queries have not succeeded for over 5 minutes. Every temporal_slo_* gauge is now showing its last known value, NOT current state. Treat the duration SLI as unavailable until this clears; check temporal_slo_poll_errors_total for the reason."
+
+      # Fires when the stuck signal is unavailable rather than when it reports
+      # zero. On a server below 1.30 stuck_executions is absent entirely, and
+      # absence is the honest representation - but absence is also easy to miss.
+      - alert: StuckDetectionUnavailable
+        expr: temporal_slo_stuck_detection_available{method="reported_problems"} == 0
+        for: 30m
+        labels:
+          severity: info
+          component: workflow-slo
+        annotations:
+          summary: "TemporalReportedProblems is unavailable in {{ $labels.namespace }}"
+          description: "Server-reported stuck detection is off, so only duration buckets are available. Needs Server 1.30+ and, self-hosted, system.numConsecutiveWorkflowTaskProblemsToTriggerSearchAttribute. Duration buckets still work and remain the primary signal."

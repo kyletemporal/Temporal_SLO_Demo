@@ -44,20 +44,36 @@ func TestParse_DurationStrings(t *testing.T) {
 	}
 }
 
-func TestParse_GeneratedConfigRoundTrips(t *testing.T) {
-	// budget-derive emits this shape. If it does not parse, step 1 hands step 2
-	// something unusable.
+func TestParse_GeneratedConfigDecodesButIsRejectedUnreviewed(t *testing.T) {
+	// This test previously asserted the generated config PARSES CLEANLY, which is
+	// the opposite of what should happen and left the suite red.
+	//
+	// budget-derive deliberately emits `owner: TODO-team` and TODO-marked
+	// budgets, and Validate deliberately rejects them. That gate is the whole
+	// safety property of step 1: numbers derived from a p99 describe what the
+	// system HAS done, not what users NEED, and the service must refuse to start
+	// on budgets nobody has agreed to.
+	//
+	// So the correct assertions are BOTH halves: the YAML decodes (step 1 hands
+	// step 2 a usable shape) AND validation refuses it until a human edits it.
 	path := "../../slo-config.generated.yaml"
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Skipf("no generated config at %s (run budget-derive first)", path)
 	}
+	// Parse returns the decoded config alongside the validation error, so the
+	// structure is inspectable even though it is correctly rejected.
 	c, err := Parse(data)
-	if err != nil {
-		t.Fatalf("generated config does not parse: %v", err)
+	if err == nil {
+		t.Fatal("generated config validated cleanly — the unreviewed-placeholder gate is gone. " +
+			"An unreviewed budget must never start the service.")
 	}
-	if len(c.WorkflowTypes) == 0 {
-		t.Fatal("generated config parsed but has no workflow types")
+	if !strings.Contains(err.Error(), "placeholder") {
+		t.Errorf("rejection should name the placeholder so the fix is obvious, got: %v", err)
+	}
+
+	if c == nil || len(c.WorkflowTypes) == 0 {
+		t.Fatal("generated config has no workflow types — step 1 emits an unusable shape")
 	}
 	for _, w := range c.WorkflowTypes {
 		if w.Budget.Std() <= 0 {

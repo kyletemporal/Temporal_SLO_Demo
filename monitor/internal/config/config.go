@@ -6,6 +6,7 @@ package config
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -70,6 +71,19 @@ type Config struct {
 // hardest on Cloud, and a tight loop across many types is the fastest way to
 // get a namespace throttled.
 const MinPollInterval = 30 * time.Second
+
+// Load reads and validates a config file.
+//
+// It returns an error for an unreviewed generated config on purpose — see the
+// placeholder checks in Validate. The service must not start against budgets
+// nobody has agreed to.
+func Load(path string) (*Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading slo-config: %w", err)
+	}
+	return Parse(data)
+}
 
 func Parse(data []byte) (*Config, error) {
 	var c Config

@@ -68,6 +68,23 @@ func Stuck(workflowType, taskQueue string) string {
 	)
 }
 
+// StuckByCause is Stuck narrowed to a single reported cause, so the exported
+// metric can carry a real `cause` label instead of a constant.
+//
+// One query per cause rather than one aggregate: WorkflowTaskFailed and
+// WorkflowTaskTimedOut have different remedies (a code bug versus a Worker that
+// cannot finish in time), and collapsing them costs the operator the one piece
+// of information that decides what to do next. The cause set is fixed at two, so
+// this doubles a small number.
+func StuckByCause(workflowType, taskQueue, cause string) string {
+	return join(
+		"ExecutionStatus = "+quote(StatusRunning),
+		"WorkflowType = "+quote(workflowType),
+		taskQueueClause(taskQueue),
+		"TemporalReportedProblems = "+quote(cause),
+	)
+}
+
 // OverBudget counts open executions that started longer ago than
 // multiplier × budget — i.e. they have been running past that many multiples of
 // the promise and have still not closed.
