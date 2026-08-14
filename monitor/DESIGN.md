@@ -22,6 +22,29 @@ becomes an SLO violation relative to a per-type budget a human agreed to.
 
 ---
 
+
+## Framing correction: this is the SECOND-choice approach
+
+Temporal's own guidance (Joshua Smith, *Temporal Cloud Observability*, July 2026)
+ranks stuck-Workflow detection in this order:
+
+1. **In-Workflow timers — recommended.** Put the deadline in the Workflow code
+   and let the Workflow detect and handle its own overrun. Simplest and cleanest:
+   no external service, no Visibility polling, no search-attribute dependency,
+   and the Workflow can act on the timeout itself rather than just reporting it.
+2. **External monitoring — what this service does.** Visibility queries plus
+   custom search attributes, from the outside.
+
+This service is therefore the complement, not the default. It earns its place for
+Workflows you do NOT control — a platform team watching application teams' code
+cannot add a timer to someone else's Workflow — and for fleet-wide SLI reporting
+that no single Workflow can produce.
+
+Say this to application teams before handing them a monitor: if they own the
+Workflow code, a timer is the better answer, and this service should not be used
+to paper over Workflows that were never given deadlines.
+
+
 ## 2. Blocking finding: `TemporalReportedProblems` availability
 
 The definitive stuck query depends on a search attribute that is **not

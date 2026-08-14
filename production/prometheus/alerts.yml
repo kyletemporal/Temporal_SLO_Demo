@@ -135,6 +135,38 @@ groups:
   # ===========================================================================
   # Worker fleet
   # ===========================================================================
+      # Poll success rate — Josh's metric 3. Targets: >90% steady load,
+      # >95% high-volume/low-latency.
+      #
+      # This is NOT sync match rate. Sync match is sync/(all delivered) and
+      # answers "was a Worker waiting?". Poll success is success/(success+timeout)
+      # and answers "did polls find work?". A LOW value with LOW schedule-to-start
+      # and IDLE hosts means too many Workers, not too few — the one signal here
+      # whose remedy is to REMOVE capacity.
+      #
+      # Same traffic guard as sync match: on an idle queue every poll times out
+      # by design, the ratio collapses, and an unguarded rule fires forever on a
+      # cluster that simply has nothing to do.
+      - alert: TemporalPollSuccessRateLow
+        expr: |
+          (
+            sum by (namespace) (rate(poll_success[5m]))
+            /
+            clamp_min(
+              sum by (namespace) (rate(poll_success[5m]))
+              + sum by (namespace) (rate(poll_timeouts[5m])), 1)
+            < 0.90
+          )
+          and
+          (sum by (namespace) (rate(poll_success[5m])) > 1)
+        for: 15m
+        labels:
+          severity: warning
+          component: temporal-matching
+        annotations:
+          summary: "Poll success rate below 90% in {{ $labels.namespace }}"
+          description: "Polls are returning empty. Cross-check schedule-to-start latency and Worker host CPU BEFORE adding capacity: if both are low, the fleet is oversized and the fix is fewer Workers, or Worker/poller autoscaling."
+
   - name: temporal-worker-fleet
     rules:
       - alert: TemporalActivityScheduleToStartHigh
@@ -258,3 +290,32 @@ groups:
         annotations:
           summary: "Over 5% of Workflows failing or timing out in {{ $labels.namespace }}"
           description: "Terminal Workflow outcomes, not absorbed Activity failures. Check retry policies (MaximumAttempts=1 converts every Activity failure into a Workflow failure), whether the Workflow handles its failure paths, and whether the Worker fleet is keeping up — timeouts usually mean saturation rather than bugs."
+
+      # ----------------------------------------------------------------------
+      # Non-determinism. Josh Smith's deck puts this in the CRITICAL/page tier,
+      # and rightly: it is the one failure Temporal cannot retry its way out of.
+      # The Workflow Task fails, retries forever, and the execution is stuck.
+      #
+      # THE LABEL IS `failure_reason`, NOT `error_type`.
+      #
+      # The rule as commonly published — including in that deck — reads
+      #   {error_type="NonDeterminismError"}
+      # which matches NOTHING on the Go SDK via tally and yields an alert that
+      # is permanently silent while looking correct in review. Verified on this
+      # stack by forcing a real NDE (`make chaos-nde`) and reading the exported
+      # series:
+      #   temporal_workflow_task_execution_failed_total{
+      #     failure_reason="NonDeterminismError", workflow_type="OrderWorkflow"} 30
+      # The VALUE is right; only the label name is wrong. Confirm on your own
+      # SDK before trusting either form — Java/TS/Python may differ again.
+      #
+      # for: 0m is deliberate. One NDE is already one stuck Workflow.
+      - alert: TemporalNonDeterminismError
+        expr: increase(temporal_workflow_task_execution_failed_total{failure_reason="NonDeterminismError"}[5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+          component: temporal-application
+        annotations:
+          summary: "Non-determinism error in {{ $labels.workflow_type }} on {{ $labels.task_queue }}"
+          description: "Workflow code changed incompatibly with in-flight histories. These executions are stuck and retrying forever; they will not self-heal. Find the affected IDs in the logs — NDEs log with code TMPRL1100 and carry WorkflowID and RunID (see the 'Find stuck executions' panel). Fix forward with Worker Versioning; metrics alone can never name the executions."

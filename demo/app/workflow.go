@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"context"
 	"fmt"
 	"math/rand"
@@ -40,6 +41,20 @@ func OrderWorkflow(ctx workflow.Context, in OrderInput) (string, error) {
 
 	logger := workflow.GetLogger(ctx)
 	logger.Info("order started", "orderID", in.OrderID)
+
+	// CHAOS: non-determinism injection. Lab use only.
+	//
+	// Set NDE_INJECT=1 on the Worker and restart it while Workflows are still
+	// open. This inserts a command that is absent from their recorded history,
+	// so replay diverges and the Workflow Task fails with a non-determinism
+	// error — the one failure mode Temporal cannot retry its way out of.
+	//
+	// This exists because the NDE alert asserts a specific label VALUE, and a
+	// label name copied from a slide is a guess until a real NDE has been
+	// observed on this SDK. `make chaos-nde` produces one on demand.
+	if os.Getenv("NDE_INJECT") == "1" {
+		_ = workflow.Sleep(ctx, time.Millisecond)
+	}
 
 	var result string
 	if err := workflow.ExecuteActivity(ctx, ValidateOrder, in).Get(ctx, &result); err != nil {

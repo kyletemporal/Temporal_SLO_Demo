@@ -300,3 +300,48 @@ healthy quiet system. The 5-minute liveness window catches it. Aggregate rather
 than per-service, because the Temporal Service logs periodically and is a
 reliable heartbeat while an idle worker is legitimately silent. Stopping Loki is
 caught too.
+
+---
+
+## Cross-check against Joshua Smith's Temporal Cloud Observability deck (2026-08-14)
+
+**Already aligned:** schedule-to-start p99 >200ms, sync match <95%, worker task
+slots >0, poll-success SLI formula, resource exhaustion (cloud), backlog count
+(cloud), SDK `request_failure` (app-team).
+
+**Gaps closed:**
+
+- `TemporalNonDeterminismError` — was ABSENT despite being the deck's CRITICAL
+  page-a-human tier. Added to demo + production.
+- `TemporalPollSuccessRateLow` — the SLI existed but nothing alerted on it.
+- Sticky cache panel (deck WATCH tier); the metrics exist on this stack.
+- TMPRL1100 / TMPRL1101 added to the stuck-executions LogQL.
+- `make chaos-nde` / `chaos-nde-stop`.
+
+**The deck's NDE rule is wrong on this SDK, and it matters.** It publishes
+
+```
+temporal_workflow_task_execution_failed_total{error_type="NonDeterminismError"}
+```
+
+Forcing a real NDE and reading the exported series gives:
+
+```
+temporal_workflow_task_execution_failed_total{failure_reason="NonDeterminismError",
+  workflow_type="OrderWorkflow", task_queue="orders", client_name="temporal_go"} 30
+```
+
+The label is **`failure_reason`**, not `error_type`. The value is correct. Copied
+verbatim, that rule matches nothing and yields a permanently silent alert for the
+single failure Temporal cannot retry its way out of. Verify on your own SDK —
+Java/TS/Python may differ again.
+
+`[TMPRL1100]` was confirmed present in worker logs, carrying WorkflowID and RunID,
+which is what makes the log panel a real path from alert to affected executions.
+
+**Open, deliberately not changed:** frontend error threshold is `>1%` here; the
+deck recommends alerting below 99.9% success (`>0.1%`), 10x tighter. Measured
+actual on this stack is 0.000000%, so the tighter value would be quiet — but it
+is a paging decision across three bundles, so it is flagged rather than switched.
+Not implemented: failure-conversion-rate (`workflow_failed / activity_execution_failed`,
+>0.1 poor / <0.01 good).

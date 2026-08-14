@@ -268,9 +268,19 @@ def logs_panel(title, gp, expr, desc):
             "options": {"showTime": True, "wrapLogMessage": True, "prettifyLogMessage": False,
                         "enableLogDetails": True, "dedupStrategy": "none", "sortOrder": "Descending"}}
 
-P.append(row("L — Logs  ·  the only place an execution ID may live", 42))
+P.append(row("K — Worker cache  ·  watch, do not page", 42))
 
-P.append(ts("Log volume by service and level", {"h": 8, "w": 8, "x": 0, "y": 43},
+P.append(ts("Sticky cache size vs forced evictions", {"h": 8, "w": 24, "x": 0, "y": 43},
+    [tgt("sum by (namespace) (temporal_sticky_cache_size)", legend="cached {{namespace}}"),
+     tgt("sum by (namespace) (rate(temporal_sticky_cache_total_forced_eviction_total[$__rate_interval]))",
+         legend="forced evictions/s {{namespace}}")],
+    "short",
+    "WATCH tier, not an alert.\n\nSticky cache size approaching WorkflowCacheSize drives forced evictions, and every eviction means the next Workflow Task replays the whole history instead of resuming from cache. That shows up as workflow task execution latency, not as an error — which is why it is worth plotting before it becomes a latency incident.",
+    legend_mode="table", legend_place="bottom", fill=10))
+
+P.append(row("L — Logs  ·  the only place an execution ID may live", 51))
+
+P.append(ts("Log volume by service and level", {"h": 8, "w": 8, "x": 0, "y": 52},
     [tgt('sum by (service, level) (rate({project="temporal-obs-demo", level=~"error|warn"}[$__interval]))',
          legend="{{service}} {{level}}")],
     "logs",
@@ -281,13 +291,13 @@ P.append(ts("Log volume by service and level", {"h": 8, "w": 8, "x": 0, "y": 43}
 P[-1]["targets"][0]["datasource"] = DS_LOKI
 P[-1]["datasource"] = DS_LOKI
 
-P.append(logs_panel("Temporal Service errors (infra)", {"h": 8, "w": 8, "x": 8, "y": 43},
+P.append(logs_panel("Temporal Service errors (infra)", {"h": 8, "w": 8, "x": 8, "y": 52},
     '{project="temporal-obs-demo", service="temporal", level=~"error|warn"}',
     "Server-side errors and warnings, JSON-parsed. This is where a persistence error or a shard problem explains a metric spike that the dashboards above can only show you the shape of."))
 
-P.append(logs_panel("Find stuck executions (workflow IDs)", {"h": 8, "w": 8, "x": 16, "y": 43},
-    '{project="temporal-obs-demo", service="worker"} |~ "(?i)(non.?determin|workflow task failed|panic|WorkflowTaskFailed)"',
-    "THE PANEL METRICS CANNOT REPLACE.\n\nSurfaces worker log lines for non-determinism and Workflow Task failures, which carry WorkflowID and RunID. The Loki datasource defines derived fields on both, so each ID is a link straight into the Temporal UI.\n\nOn servers below 1.30 (no TemporalReportedProblems) this is the primary route from a stuck-workflow alert to the affected executions."))
+P.append(logs_panel("Find stuck executions (workflow IDs)", {"h": 8, "w": 8, "x": 16, "y": 52},
+    '{project="temporal-obs-demo", service="worker"} |~ "TMPRL1100|TMPRL1101|(?i)(non.?determin|workflow task failed|deadlock detected|panic)"',
+    "THE PANEL METRICS CANNOT REPLACE.\n\nSurfaces worker log lines for non-determinism and Workflow Task failures, which carry WorkflowID and RunID.\n\nTMPRL1100 = non-determinism; TMPRL1101 = deadlock detected during workflow run (a Workflow Task taking too long, usually a blocking call in Workflow code). Both codes verified present in this stack by forcing a real NDE with `make chaos-nde`. The Loki datasource defines derived fields on both, so each ID is a link straight into the Temporal UI.\n\nOn servers below 1.30 (no TemporalReportedProblems) this is the primary route from a stuck-workflow alert to the affected executions."))
 
 dash = {
     "__inputs": [{"name": "DS_PROMETHEUS", "label": "Prometheus", "description": "",

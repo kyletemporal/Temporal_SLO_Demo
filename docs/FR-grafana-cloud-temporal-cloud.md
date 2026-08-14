@@ -97,3 +97,19 @@ is materially larger than the integration page suggests.
 - <https://docs.temporal.io/cloud/metrics/openmetrics/metrics-integrations#grafana-cloud>
 - <https://grafana.com/docs/grafana-cloud/monitor-infrastructure/integrations/integration-reference/integration-temporal/>
 - <https://temporal.io/blog/monitoring-temporal-cloud-workflows-with-grafana-cloud>
+
+---
+
+## Related: upstream resources worth tracking
+
+From Joshua Smith's *Temporal Cloud Observability* deck (July 2026):
+
+- **Official Temporal observability skill** — <https://github.com/temporalio/skill-temporal-observability>
+  A skill for coding agents instrumenting/querying/alerting on Temporal metrics.
+  Worth diffing against this repo's rules rather than maintaining both blindly.
+- **SDK alert pack** (~24 rules) — <https://github.com/tsurdilo/temporal-server-operations/tree/main/metrics/alerts/sdk>
+  Covers ground this repo does not: NOT_FOUND on respond operations, all-pollers-disconnected,
+  sticky cache disabled, local-activity latency exceeding WFT heartbeat timeout.
+- Worker health — <https://docs.temporal.io/cloud/worker-health>
+- Poller autoscaling, Worker autoscaling, Serverless Workers — the standard remedies
+  for both "too few Workers" (schedule-to-start) and "too many" (poll success).

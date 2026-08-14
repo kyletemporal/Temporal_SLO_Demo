@@ -120,3 +120,32 @@ scale-up: ## Scale to 5 workers — use mid-storm to show recovery
 .PHONY: scale-reset
 scale-reset: ## Back to 1 worker
 	docker compose up -d --scale worker=1 worker
+
+# Force a REAL non-determinism error.
+#
+# Starts long-running Workflows, then swaps in Worker code that issues a command
+# their recorded histories do not contain, so replay diverges. This is how the
+# NDE alert's label name was verified rather than copied — see the comment on
+# TemporalNonDeterminismError in prometheus/alerts.yml.
+#
+# Expect: TemporalNonDeterminismError fires, TMPRL1100 appears in the worker
+# logs with WorkflowID and RunID, and the "Find stuck executions" panel names
+# the affected executions.
+.PHONY: chaos-nde
+chaos-nde:
+	@echo "==> starting long-running workflows"
+	@for i in 1 2 3; do curl -sf -X POST localhost:8081/orders -H 'Content-Type: application/json' \
+	  -d "{\"orderId\":\"nde-$$i\",\"failureRate\":0,\"activityDelayMs\":45000,\"maxAttempts\":3,\"wait\":false}" >/dev/null || true; done
+	@echo "==> swapping in divergent worker code (NDE_INJECT=1)"
+	@docker compose stop worker >/dev/null 2>&1 || true
+	@docker compose run -d --rm -e NDE_INJECT=1 -e MODE=worker -e TEMPORAL_ADDRESS=temporal:7233 \
+	  -e TEMPORAL_NAMESPACE=default -e TASK_QUEUE=orders -e METRICS_PORT=8077 worker >/dev/null
+	@echo "    NOTE: this replacement Worker is NOT a Prometheus scrape target"
+	@echo "    (compose run containers are not resolved by the worker DNS name),"
+	@echo "    so read the NDE from its /metrics or the logs, not the dashboards."
+	@echo "==> wait ~90s, then: make chaos-nde-stop"
+
+.PHONY: chaos-nde-stop
+chaos-nde-stop:
+	@docker rm -f $$(docker ps -q --filter "ancestor=temporal-obs-demo-worker") >/dev/null 2>&1 || true
+	@docker compose up -d worker >/dev/null && echo "normal worker restored"

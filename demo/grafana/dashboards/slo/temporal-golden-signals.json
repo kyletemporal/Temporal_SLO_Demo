@@ -1338,7 +1338,7 @@
     },
     {
       "type": "row",
-      "title": "L \u2014 Logs  \u00b7  the only place an execution ID may live",
+      "title": "K \u2014 Worker cache  \u00b7  watch, do not page",
       "collapsed": false,
       "id": 21,
       "gridPos": {
@@ -1351,8 +1351,93 @@
     },
     {
       "type": "timeseries",
-      "title": "Log volume by service and level",
+      "title": "Sticky cache size vs forced evictions",
       "id": 22,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 43
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum by (namespace) (temporal_sticky_cache_size)",
+          "range": true,
+          "instant": false,
+          "refId": "A",
+          "legendFormat": "cached {{namespace}}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum by (namespace) (rate(temporal_sticky_cache_total_forced_eviction_total[$__rate_interval]))",
+          "range": true,
+          "instant": false,
+          "refId": "A",
+          "legendFormat": "forced evictions/s {{namespace}}"
+        }
+      ],
+      "description": "WATCH tier, not an alert.\n\nSticky cache size approaching WorkflowCacheSize drives forced evictions, and every eviction means the next Workflow Task replays the whole history instead of resuming from cache. That shows up as workflow task execution latency, not as an error \u2014 which is why it is worth plotting before it becomes a latency incident.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "short",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "axisSoftMin": 0
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "L \u2014 Logs  \u00b7  the only place an execution ID may live",
+      "collapsed": false,
+      "id": 23,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 51
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Log volume by service and level",
+      "id": 24,
       "datasource": {
         "type": "loki",
         "uid": "loki"
@@ -1361,7 +1446,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 43
+        "y": 52
       },
       "targets": [
         {
@@ -1425,7 +1510,7 @@
     {
       "type": "logs",
       "title": "Temporal Service errors (infra)",
-      "id": 23,
+      "id": 25,
       "datasource": {
         "type": "loki",
         "uid": "loki"
@@ -1434,7 +1519,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 43
+        "y": 52
       },
       "description": "Server-side errors and warnings, JSON-parsed. This is where a persistence error or a shard problem explains a metric spike that the dashboards above can only show you the shape of.",
       "targets": [
@@ -1460,7 +1545,7 @@
     {
       "type": "logs",
       "title": "Find stuck executions (workflow IDs)",
-      "id": 24,
+      "id": 26,
       "datasource": {
         "type": "loki",
         "uid": "loki"
@@ -1469,16 +1554,16 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 43
+        "y": 52
       },
-      "description": "THE PANEL METRICS CANNOT REPLACE.\n\nSurfaces worker log lines for non-determinism and Workflow Task failures, which carry WorkflowID and RunID. The Loki datasource defines derived fields on both, so each ID is a link straight into the Temporal UI.\n\nOn servers below 1.30 (no TemporalReportedProblems) this is the primary route from a stuck-workflow alert to the affected executions.",
+      "description": "THE PANEL METRICS CANNOT REPLACE.\n\nSurfaces worker log lines for non-determinism and Workflow Task failures, which carry WorkflowID and RunID.\n\nTMPRL1100 = non-determinism; TMPRL1101 = deadlock detected during workflow run (a Workflow Task taking too long, usually a blocking call in Workflow code). Both codes verified present in this stack by forcing a real NDE with `make chaos-nde`. The Loki datasource defines derived fields on both, so each ID is a link straight into the Temporal UI.\n\nOn servers below 1.30 (no TemporalReportedProblems) this is the primary route from a stuck-workflow alert to the affected executions.",
       "targets": [
         {
           "datasource": {
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "{project=\"temporal-obs-demo\", service=\"worker\"} |~ \"(?i)(non.?determin|workflow task failed|panic|WorkflowTaskFailed)\"",
+          "expr": "{project=\"temporal-obs-demo\", service=\"worker\"} |~ \"TMPRL1100|TMPRL1101|(?i)(non.?determin|workflow task failed|deadlock detected|panic)\"",
           "queryType": "range",
           "refId": "A"
         }
