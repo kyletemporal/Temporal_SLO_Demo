@@ -179,6 +179,60 @@ services:
       API_BASE: http://api:8081
     networks: [tobs]
 
+  # ---------------------------------------------------------------------------
+  # Logs
+  #
+  # Why logs belong in this stack rather than being someone else's problem:
+  # every metric and alert here REFUSES a workflow_id label, because that is an
+  # unbounded dimension and Temporal omits it from SDK metrics for the same
+  # reason. So metrics can tell you three workflows are stuck; they can never
+  # tell you WHICH.
+  #
+  # On any server below 1.30 there is no TemporalReportedProblems search
+  # attribute either, so worker logs are the only route from "something is
+  # stuck" to an execution ID. That makes Loki a dependency of the
+  # stuck-workflow runbook, not a nice-to-have.
+  # ---------------------------------------------------------------------------
+  loki:
+    image: grafana/loki:${LOKI_VERSION:-3.3.2}
+    container_name: tobs-loki
+    command: -config.file=/etc/loki/loki-config.yaml
+    volumes:
+      - ./loki/loki-config.yaml:/etc/loki/loki-config.yaml:ro
+    ports:
+      - "3100:3100"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3100/ready | grep -q ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    networks: [tobs]
+
+  # Alloy, not Promtail: Promtail is deprecated, Alloy is the supported
+  # collector. Reads container logs from the Docker socket.
+  #
+  # The socket mount is COMPOSE-SPECIFIC. On Kubernetes this becomes an Alloy
+  # DaemonSet reading pod logs — same Loki, different discovery.
+  alloy:
+    image: grafana/alloy:${ALLOY_VERSION:-v1.5.1}
+    container_name: tobs-alloy
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    volumes:
+      - ./alloy/config.alloy:/etc/alloy/config.alloy:ro
+      # Read-only socket: Alloy only needs to LIST containers and read logs.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      loki:
+        condition: service_healthy
+    ports:
+      - "12345:12345"
+    networks: [tobs]
+
 networks:
   tobs:
     driver: bridge

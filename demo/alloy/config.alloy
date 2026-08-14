@@ -1,0 +1,95 @@
+// Grafana Alloy — collects container logs and ships them to Loki.
+//
+// Alloy, not Promtail: Promtail is deprecated and Alloy is the supported
+// collector. Same job, current tooling.
+
+// Discover every container on this Docker host.
+discovery.docker "containers" {
+  host             = "unix:///var/run/docker.sock"
+  refresh_interval = "10s"
+}
+
+// Turn Docker metadata into LABELS.
+//
+// Label cardinality is the whole ballgame in Loki, exactly as it is in
+// Prometheus. These are bounded: a handful of containers, one compose project.
+//
+// WORKFLOW ID IS DELIBERATELY NOT A LABEL. It is unbounded, and a label per
+// workflow would destroy the index the same way it would destroy Prometheus.
+// It stays in the log LINE, where LogQL extracts it at query time — which is
+// the entire reason logs can answer "which execution is stuck" and metrics
+// cannot.
+discovery.relabel "containers" {
+  targets = discovery.docker.containers.targets
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "service"
+  }
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+    target_label  = "project"
+  }
+  // Only this stack's containers.
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+    regex         = "temporal-obs-demo"
+    action        = "keep"
+  }
+}
+
+loki.source.docker "containers" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.relabel.containers.output
+  labels     = {job = "docker"}
+  forward_to = [loki.process.temporal.receiver]
+}
+
+// Extract a `level` label so dashboards can filter on severity.
+//
+// Temporal server logs are JSON with a "level" field; the Go SDK app logs are
+// plain text with a leading level word. Handle both, and keep `level` bounded
+// to the usual few values.
+loki.process "temporal" {
+  // Temporal server logs are JSON with a lowercase "level".
+  stage.json {
+    expressions = {level = "level"}
+  }
+
+  // The Go SDK application logs are PLAIN TEXT, so the stage above extracts
+  // nothing from them. Match the level word on the raw line instead — reading
+  // from `msg` only works for the JSON path and silently leaves every worker
+  // line unlabelled.
+  // ANCHORED to the level's position in the line: `2026/08/14 02:45:23 DEBUG …`
+  // An unanchored search matches the word "error" anywhere in a message, so a
+  // DEBUG line reading "payment declined: error" gets tagged level=error and
+  // the dashboard shows hundreds of failures that never happened.
+  stage.regex {
+    expression = "^\\S+\\s+\\S+\\s+(?P<lvl>DEBUG|INFO|WARN|WARNING|ERROR|FATAL)\\b"
+  }
+
+  // Normalise case. JSON emits "warn", plain text emits "WARN"; without this
+  // the same severity lands under two label values and every dashboard query
+  // needs a case-insensitive regex to find both.
+  stage.template {
+    source   = "level"
+    template = "{{ if .Value }}{{ ToLower .Value }}{{ else }}{{ ToLower .lvl }}{{ end }}"
+  }
+
+  stage.labels {
+    values = {level = ""}
+  }
+
+  forward_to = [loki.write.default.receiver]
+}
+
+loki.write "default" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

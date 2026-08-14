@@ -7,6 +7,7 @@ OUT = sys.argv[1] if len(sys.argv) > 1 else \
     str(pathlib.Path(__file__).resolve().parent.parent / "production/grafana/dashboards/temporal-golden-signals.json")
 
 DS = {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}
+DS_LOKI = {"type": "loki", "uid": "loki"}
 
 # Status palette — reserved for state, never reused as a series colour.
 GOOD, SERIOUS, CRITICAL = "#0ca30c", "#ec835a", "#d03b3b"
@@ -247,6 +248,46 @@ P.append(ts("Tasks with no poller", {"h": 7, "w": 8, "x": 16, "y": 32},
     thr={"mode": "absolute", "steps": [{"color": GOOD, "value": None},
                                        {"color": CRITICAL, "value": 0.0001}]},
     legend_mode="list", fill=18))
+
+# =========================================================================
+# L — LOGS
+#
+# Logs are here because metrics structurally cannot answer "which execution?".
+# Every rule in this repo refuses a workflow_id label — unbounded cardinality,
+# and Temporal omits it from SDK metrics for the same reason. Logs carry it in
+# the LINE, where LogQL extracts it at query time.
+#
+# On any server below 1.30 there is also no TemporalReportedProblems search
+# attribute, so worker logs are the ONLY route from "something is stuck" to an
+# execution ID.
+# =========================================================================
+def logs_panel(title, gp, expr, desc):
+    return {"type": "logs", "title": title, "id": nid(), "datasource": DS_LOKI,
+            "gridPos": gp, "description": desc,
+            "targets": [{"datasource": DS_LOKI, "expr": expr, "queryType": "range", "refId": "A"}],
+            "options": {"showTime": True, "wrapLogMessage": True, "prettifyLogMessage": False,
+                        "enableLogDetails": True, "dedupStrategy": "none", "sortOrder": "Descending"}}
+
+P.append(row("L — Logs  ·  the only place an execution ID may live", 42))
+
+P.append(ts("Log volume by service and level", {"h": 8, "w": 8, "x": 0, "y": 43},
+    [tgt('sum by (service, level) (rate({project="temporal-obs-demo", level=~"error|warn"}[$__interval]))',
+         legend="{{service}} {{level}}")],
+    "logs",
+    "Error and warning lines per second, from Loki.\n\nLevel is extracted with an ANCHORED regex on the line prefix. An unanchored match tags any line containing the word 'error' — which produced 644 phantom worker errors before it was fixed.",
+    thr={"mode": "absolute", "steps": [{"color": GOOD, "value": None},
+                                      {"color": SERIOUS, "value": 0.1}]},
+    legend_mode="table", legend_place="right", fill=18))
+P[-1]["targets"][0]["datasource"] = DS_LOKI
+P[-1]["datasource"] = DS_LOKI
+
+P.append(logs_panel("Temporal Service errors (infra)", {"h": 8, "w": 8, "x": 8, "y": 43},
+    '{project="temporal-obs-demo", service="temporal", level=~"error|warn"}',
+    "Server-side errors and warnings, JSON-parsed. This is where a persistence error or a shard problem explains a metric spike that the dashboards above can only show you the shape of."))
+
+P.append(logs_panel("Find stuck executions (workflow IDs)", {"h": 8, "w": 8, "x": 16, "y": 43},
+    '{project="temporal-obs-demo", service="worker"} |~ "(?i)(non.?determin|workflow task failed|panic|WorkflowTaskFailed)"',
+    "THE PANEL METRICS CANNOT REPLACE.\n\nSurfaces worker log lines for non-determinism and Workflow Task failures, which carry WorkflowID and RunID. The Loki datasource defines derived fields on both, so each ID is a link straight into the Temporal UI.\n\nOn servers below 1.30 (no TemporalReportedProblems) this is the primary route from a stuck-workflow alert to the affected executions."))
 
 dash = {
     "__inputs": [{"name": "DS_PROMETHEUS", "label": "Prometheus", "description": "",

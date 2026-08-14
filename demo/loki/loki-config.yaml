@@ -1,0 +1,48 @@
+# Single-binary Loki, filesystem storage. Demo shape.
+#
+# NOT production: no replication, no object store, no retention enforcement
+# beyond the compactor below, and no volume mount in compose — `deploy.sh
+# --clean` erases logs exactly as it erases metrics. Production wants S3/GCS
+# and a real retention policy.
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+  grpc_listen_port: 9096
+  log_level: warn
+
+common:
+  instance_addr: 127.0.0.1
+  path_prefix: /loki
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+
+schema_config:
+  configs:
+    - from: 2024-01-01
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+limits_config:
+  # Container logs arrive with clock skew from the host; without a generous
+  # reject window, bursts of older lines are silently dropped and you get a
+  # log view with holes in it that looks like the app went quiet.
+  reject_old_samples: true
+  reject_old_samples_max_age: 168h
+  max_query_lookback: 720h
+  volume_enabled: true
+
+compactor:
+  working_directory: /loki/compactor
+  retention_enabled: true
+  delete_request_store: filesystem
