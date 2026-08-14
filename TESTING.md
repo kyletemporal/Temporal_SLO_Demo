@@ -275,3 +275,28 @@ failure mode, and `conformance-check.sh` catches the silence.
 
 `demo/` and `production/` still share 14 `slo:*` record names. They are
 alternatives, never both, and both READMEs say so.
+
+---
+
+## Log checks in `make validate` (2026-08-14)
+
+Section 6 covers Loki. Adding the log panels initially **broke** the validator —
+it sent LogQL to Prometheus, producing two false "NO DATA" and one HTTP 400.
+Panels are now routed by their datasource type.
+
+The three log panels are allowlisted as empty-by-design (no errors, nothing
+stuck — the good outcomes), which is only safe because section 6 proves the
+pipeline independently:
+
+- **liveness over a 5-minute window**, not presence over an hour
+- `temporal` and `worker` logs both arriving
+- `level` label populated (a broken regex silently voids every severity filter)
+- worker logs carry `WorkflowID`
+- `workflow_id`/`run_id` are **not** Loki labels — that would be a cardinality bomb
+
+**Negative-tested.** Stopping Alloy with a one-hour window still passed, because
+Loki keeps what was already shipped — a dead collector looked identical to a
+healthy quiet system. The 5-minute liveness window catches it. Aggregate rather
+than per-service, because the Temporal Service logs periodically and is a
+reliable heartbeat while an idle worker is legitimately silent. Stopping Loki is
+caught too.

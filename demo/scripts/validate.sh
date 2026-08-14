@@ -16,6 +16,7 @@ cd "$ROOT"
 
 PROM="${PROM:-http://localhost:9090}"
 GRAF="${GRAF:-http://localhost:3000}"
+LOKI="${LOKI:-http://localhost:3100}"
 
 PASS=0
 FAIL=0
@@ -118,6 +119,7 @@ python3 - <<'PY'
 import json, glob, os, sys, urllib.parse, urllib.request
 
 PROM = os.environ.get("PROM", "http://localhost:9090")
+LOKI = os.environ.get("LOKI", "http://localhost:3100")
 
 def _q(expr):
     u = PROM + "/api/v1/query?query=" + urllib.parse.quote(expr)
@@ -157,6 +159,15 @@ EXPECTED_EMPTY = {k.lower(): v for k, v in {
         "failed/timeout series only exist once such an outcome occurs",
     "Server-fault rate by type":
         "no server faults have occurred — empty here is the healthy state",
+    # Log panels. An empty log panel is NOT evidence the pipeline is broken —
+    # section 6 checks that separately, which is the only reason these can be
+    # allowlisted without hiding a dead collector.
+    "Log volume by service and level":
+        "no error/warn lines right now — the healthy state",
+    "Temporal Service errors (infra)":
+        "no server errors or warnings right now — the healthy state",
+    "Find stuck executions (workflow IDs)":
+        "no non-determinism or Workflow Task failures — this being empty is the GOOD outcome",
 }.items()}
 
 def panels(ps):
@@ -176,6 +187,24 @@ def q(expr):
         return "BADQUERY", str(r.get("error"))[:100]
     return ("DATA" if r["data"]["result"] else "EMPTY"), len(r["data"]["result"])
 
+
+def q_loki(expr):
+    """LogQL against Loki. Sending this to Prometheus returns HTTP 400 or a
+    false 'no data' — the two are different query languages and the panel's
+    datasource type is the only thing that says which is which."""
+    import time
+    end = int(time.time())
+    start = end - 3600
+    u = (LOKI + "/loki/api/v1/query_range?query=" + urllib.parse.quote(expr)
+         + f"&start={start}000000000&end={end}000000000&limit=5")
+    try:
+        r = json.load(urllib.request.urlopen(u, timeout=20))
+    except Exception as e:
+        return "ERROR", str(e)[:70]
+    if r.get("status") != "success":
+        return "BADQUERY", str(r.get("status"))[:100]
+    return ("DATA" if r["data"]["result"] else "EMPTY"), len(r["data"]["result"])
+
 rc = 0
 for path in sorted(glob.glob("grafana/dashboards/*/*.json")):
     if "/community/" in path:
@@ -190,7 +219,9 @@ for path in sorted(glob.glob("grafana/dashboards/*/*.json")):
                 continue
             e2 = (e.replace("$__rate_interval", "5m").replace("$__interval", "1m")
                    .replace("$namespace", ".*").replace("$task_queue", ".*"))
-            st, info = q(e2)
+            # Route by the panel's datasource, not by guessing from the query.
+            ds = (t.get("datasource") or p.get("datasource") or {})
+            st, info = q_loki(e2) if ds.get("type") == "loki" else q(e2)
             title = p.get("title", "?")
             if st == "DATA":
                 print(f"    \033[32m PASS\033[0m  {title[:58]}")
@@ -210,7 +241,91 @@ PY
              || bad "one or more dashboard panels returned no data"
 
 # -----------------------------------------------------------------------------
-hdr "6. SLO board state"
+hdr "6. Logs (Loki)"
+# -----------------------------------------------------------------------------
+# The log PANELS above are allowlisted as empty-by-design, so THIS section is
+# what actually proves the pipeline works. Without it a dead Alloy looks
+# identical to a healthy quiet system: every log panel empty, every check green,
+# and the one signal that can identify a stuck execution silently gone.
+if curl -sf "$LOKI/ready" 2>/dev/null | grep -qi ready; then
+  ok "Loki is ready"
+
+  # lq <query> [window_seconds]
+  lq() {
+    local now start win
+    win="${2:-3600}"
+    now=$(date +%s); start=$((now - win))
+    curl -sf -G "$LOKI/loki/api/v1/query_range" \
+      --data-urlencode "query=$1" --data-urlencode "start=${start}000000000" \
+      --data-urlencode "end=${now}000000000" --data-urlencode "limit=5" 2>/dev/null \
+      | python3 -c "
+import json,sys
+try: print(len(json.load(sys.stdin)['data']['result']))
+except Exception: print(0)" 2>/dev/null | head -1
+  }
+
+  # LIVENESS, not presence. A one-hour window still passes with the collector
+  # dead, because Loki keeps what Alloy shipped before it died — verified by
+  # stopping Alloy and watching this check stay green. Five minutes asks "are
+  # logs arriving NOW".
+  #
+  # Aggregate, not per-service: the Temporal Service logs periodically and is a
+  # reliable heartbeat, whereas an idle worker is legitimately silent.
+  live_n="$(lq '{project="temporal-obs-demo"}' 300)"
+  if [ "${live_n:-0}" -gt 0 ] 2>/dev/null; then
+    ok "logs arriving now (last 5m)"
+  else
+    bad "NO logs in the last 5 MINUTES — the collector is probably dead.
+         Loki may still hold older logs, so the dashboards will look fine.
+         Check: docker compose logs alloy"
+  fi
+
+  # Losing worker logs specifically means losing the only route from a
+  # stuck-workflow alert to an execution ID on any server below 1.30.
+  # Build the query in a variable first. Nesting double quotes inside $( )
+  # inside [ ] expands to multiple words and `[` reports "too many arguments".
+  for svc in temporal worker; do
+    svc_q="{project=\"temporal-obs-demo\", service=\"$svc\"}"
+    svc_n="$(lq "$svc_q")"
+    if [ "${svc_n:-0}" -gt 0 ] 2>/dev/null; then
+      ok "$svc logs present"
+    else
+      bad "no logs from '$svc' — that source is not being collected"
+    fi
+  done
+
+  levels=$(curl -sf "$LOKI/loki/api/v1/label/level/values" 2>/dev/null | python3 -c "
+import json,sys
+try: print(','.join(json.load(sys.stdin).get('data') or []))
+except Exception: print('')" 2>/dev/null)
+  if [ -n "$levels" ]; then
+    ok "level label parsed: $levels"
+  else
+    bad "no 'level' label values — level extraction is broken, so every
+         severity filter on the dashboards silently matches nothing"
+  fi
+
+  wf_q='{project="temporal-obs-demo", service="worker"} |~ "(?i)workflowid"'
+  wf_n="$(lq "$wf_q")"
+  if [ "${wf_n:-0}" -gt 0 ] 2>/dev/null; then
+    ok "worker logs carry WorkflowID — execution lookup will work"
+  else
+    warn "no WorkflowID in worker logs this hour (needs traffic)"
+  fi
+
+  # workflow_id as a LABEL would be a cardinality bomb. It belongs in the line.
+  if curl -sf "$LOKI/loki/api/v1/labels" 2>/dev/null | grep -qiE '"(workflow_id|workflowid|run_id|runid)"'; then
+    bad "workflow_id/run_id is a LOKI LABEL — unbounded cardinality. It belongs
+         in the log line only, extracted by LogQL at query time."
+  else
+    ok "no unbounded workflow/run id labels"
+  fi
+else
+  warn "Loki not reachable at $LOKI — log panels will be empty"
+fi
+
+# -----------------------------------------------------------------------------
+hdr "7. SLO board state"
 # -----------------------------------------------------------------------------
 curl -sf "$PROM/api/v1/query" --data-urlencode 'query=slo:error_budget_remaining:ratio' 2>/dev/null | python3 -c "
 import json,sys
@@ -230,7 +345,7 @@ else:   print('  \033[32m PASS\033[0m  every SLO within budget')
 " || bad "could not read SLO series"
 
 # -----------------------------------------------------------------------------
-hdr "7. Alert state"
+hdr "8. Alert state"
 # -----------------------------------------------------------------------------
 echo "$rules" | python3 -c "
 import json,sys
