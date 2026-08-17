@@ -101,9 +101,9 @@ service and Temporal is the common migration target. What would earn its place:
   The OTel Collector already in `demo/` can fan out to both, which is the natural
   place to add it.
 
-Suggested first slice: **S3 export sink + EKS Worker deployment**, since both are
-concrete, both are provisionable in Terraform, and both are things a platform
-team hits in week one rather than eventually.
+**DONE 2026-08-17: S3 export sink + EKS Worker deployment** — see [`aws/`](aws).
+Both validate; neither has been applied. Remaining AWS items above are still open,
+with CloudWatch fan-out via the existing OTel Collector the most natural next one.
 
 ## Open questions for the customer
 

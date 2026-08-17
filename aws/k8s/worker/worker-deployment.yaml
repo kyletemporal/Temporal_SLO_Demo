@@ -1,0 +1,180 @@
+# Temporal Worker on EKS.
+#
+# Two things here differ from a normal service deployment, and both matter more
+# than anything else in this file.
+#
+# 1. NO READINESS PROBE ON AN HTTP PORT THAT SERVES TRAFFIC.
+#    A Worker is not a server. Nothing routes to it — it POLLS. A readiness
+#    probe modelled on a web service asks the wrong question, and a Worker
+#    removed from a Service endpoint list keeps polling regardless. What you
+#    actually care about is whether it is polling, and that is a metric, not a
+#    probe.
+#
+# 2. DO NOT AUTOSCALE ON CPU. See the KEDA ScaledObject in scaledobject.yaml.
+#    A Worker blocked on a long-poll uses almost no CPU, so CPU-based scaling
+#    scales DOWN a fleet that is falling behind.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: temporal-worker
+  namespace: temporal-workers
+  annotations:
+    # IRSA. The Worker assumes this role for AWS access (S3 payload codec, KMS,
+    # Secrets Manager) with no static credentials anywhere.
+    #
+    # Temporal Cloud auth is SEPARATE — that is an API key or mTLS cert, which
+    # is why the secret below still exists. IRSA does not replace it.
+    eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/temporal-worker
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: temporal-worker
+  namespace: temporal-workers
+  labels:
+    app.kubernetes.io/name: temporal-worker
+    app.kubernetes.io/component: worker
+spec:
+  # No replicas field. KEDA owns it — setting both means Terraform/kubectl and
+  # KEDA fight, and the fleet oscillates.
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: temporal-worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: temporal-worker
+        app.kubernetes.io/component: worker
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: /metrics
+    spec:
+      serviceAccountName: temporal-worker
+
+      # A Worker holding Activity slots needs to finish or fail them cleanly.
+      # The default 30s kills long Activities mid-flight, which turns a rolling
+      # deploy into a burst of Activity timeouts and retries.
+      #
+      # Set this ABOVE your longest Activity StartToCloseTimeout where you can.
+      terminationGracePeriodSeconds: 120
+
+      containers:
+        - name: worker
+          image: ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/temporal-worker:TAG
+          imagePullPolicy: IfNotPresent
+
+          ports:
+            - name: metrics
+              containerPort: 9090
+            # pprof. Deliberately NOT in a Service — it exposes goroutine stacks
+            # and heap contents. Reach it with `kubectl port-forward`.
+            - name: pprof
+              containerPort: 6060
+
+          env:
+            - name: TEMPORAL_ADDRESS
+              value: "NAMESPACE.ACCOUNT.tmprl.cloud:7233"
+            - name: TEMPORAL_NAMESPACE
+              value: "NAMESPACE.ACCOUNT"
+            - name: TASK_QUEUE
+              value: "orders"
+            - name: TEMPORAL_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: temporal-cloud-credentials
+                  key: api-key
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "otel-collector.observability.svc.cluster.local:4317"
+            - name: PYROSCOPE_ADDRESS
+              value: "http://pyroscope.observability.svc.cluster.local:4040"
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "512Mi"
+            limits:
+              # NO CPU LIMIT, on purpose.
+              #
+              # CPU limits cause throttling, and a throttled Worker's Workflow
+              # Task latency rises without any obvious cause — it looks like slow
+              # Workflow code. Requests reserve capacity; limits just add a cliff.
+              # Set a memory limit (OOM is a real failure) and leave CPU to
+              # requests plus the scheduler.
+              memory: "2Gi"
+
+          # LIVENESS ONLY, and it deliberately does not test Temporal
+          # connectivity. A Worker that cannot reach Temporal must NOT be
+          # restarted — restarting does not fix a broken network path, it just
+          # discards the sticky cache and forces every Workflow to replay from
+          # history when connectivity returns. Restart only on a wedged process.
+          livenessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            initialDelaySeconds: 20
+            periodSeconds: 30
+            failureThreshold: 5
+
+          # Startup probe so a slow first connection does not trip liveness.
+          startupProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            failureThreshold: 30
+            periodSeconds: 5
+
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+
+      # Spread across AZs. A Worker fleet in one AZ is a fleet that a single AZ
+      # event takes to zero, and Temporal will happily keep queuing tasks for it.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: temporal-worker
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: temporal-worker-metrics
+  namespace: temporal-workers
+  labels:
+    app.kubernetes.io/name: temporal-worker
+spec:
+  # Headless: this exists ONLY for metrics discovery. Nothing routes requests to
+  # a Worker — it polls outbound. pprof is not listed here on purpose.
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: temporal-worker
+  ports:
+    - name: metrics
+      port: 9090
+      targetPort: metrics
+---
+# A Worker fleet that cannot be voluntarily drained to zero. Without this, a node
+# drain can evict every Worker at once and the task queue goes unpolled — which
+# looks exactly like an application outage from the Workflow's point of view.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: temporal-worker
+  namespace: temporal-workers
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: temporal-worker

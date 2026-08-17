@@ -1,0 +1,137 @@
+# Autoscaling a Temporal Worker fleet.
+#
+# THE CENTRAL POINT: DO NOT SCALE ON CPU.
+#
+# A Worker spends most of its life blocked in a long poll, which costs almost no
+# CPU. So when the queue backs up and the fleet is falling behind, CPU stays flat
+# or drops — and a CPU-based HPA responds by scaling DOWN the fleet that is
+# already behind. It is not merely a weak signal; it is inverted.
+#
+# The right signal is SCHEDULE-TO-START LATENCY: how long a task waits before a
+# Worker picks it up. It is a direct measure of "is the fleet keeping up", it is
+# upstream of everything a user would notice, and it responds immediately to
+# adding capacity.
+#
+# KEDA rather than a plain HPA because HPA external metrics need the Prometheus
+# Adapter and a separate API service; KEDA reads Prometheus directly.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: temporal-worker
+  namespace: temporal-workers
+spec:
+  scaleTargetRef:
+    name: temporal-worker
+
+  minReplicaCount: 2        # never scale to zero: an unpolled queue is an outage
+  maxReplicaCount: 50
+  pollingInterval: 30
+  cooldownPeriod: 300       # slow to scale down; see the behavior block below
+
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        # Scale UP fast, DOWN slowly, and the asymmetry is deliberate.
+        #
+        # Scaling up late means tasks waiting. Scaling down early means dropping
+        # Workers that are mid-Activity, and a Worker killed mid-Activity turns
+        # into an Activity timeout and a retry — so aggressive scale-down
+        # manufactures the very latency the autoscaler exists to prevent.
+        scaleUp:
+          stabilizationWindowSeconds: 0
+          policies:
+            - type: Percent
+              value: 100
+              periodSeconds: 30
+        scaleDown:
+          stabilizationWindowSeconds: 600
+          policies:
+            - type: Percent
+              value: 10
+              periodSeconds: 60
+
+  triggers:
+    # PRIMARY: schedule-to-start p95, in seconds.
+    #
+    # threshold 0.2 targets Temporal's published 200ms guidance. UNITS MATTER —
+    # this assumes a Go/Java Worker emitting SECONDS. For TypeScript, Python or
+    # .NET drop `_seconds` from the metric name and use 200, not 0.2. Getting it
+    # wrong is a silent 1000x error that makes the autoscaler either never act or
+    # never stop.
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus.observability.svc.cluster.local:9090
+        metricName: temporal_activity_schedule_to_start_p95
+        threshold: "0.2"
+        query: |
+          histogram_quantile(0.95, sum by (le) (rate(
+            temporal_activity_schedule_to_start_latency_seconds_bucket{
+              namespace="NAMESPACE", task_queue="orders"
+            }[2m])))
+
+    # SECONDARY: task backlog.
+    #
+    # Latency is a lagging signal — it only rises once tasks are already waiting.
+    # Backlog leads it, so this reacts to a burst before anyone has waited.
+    # Whichever trigger demands more replicas wins.
+    #
+    # THIS TRIGGER IS TEMPORAL CLOUD ONLY. temporal_cloud_v1_* metrics do not
+    # exist on a self-hosted cluster, so on self-hosted this query returns
+    # nothing and KEDA reports the trigger inactive — indistinguishable from
+    # "no backlog". Delete it, or replace it with the self-hosted equivalent:
+    #
+    #   sum(rate(no_poller_tasks{namespace="NAMESPACE"}[2m]))        # nobody polling
+    #   sum by (namespace) (rate(poll_success_sync[2m]))
+    #     / clamp_min(sum by (namespace) (rate(poll_success[2m])), 1) # sync match
+    #
+    # A falling sync-match rate means tasks are being persisted before delivery
+    # because no Worker was ready — which is the self-hosted way of saying the
+    # queue is backing up.
+    #
+    # Note sum(), never rate(), on temporal_cloud_v1_* — they are pre-computed
+    # per-second gauges, and rate() on them is meaningless.
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus.observability.svc.cluster.local:9090
+        metricName: temporal_task_backlog
+        threshold: "100"
+        query: |
+          sum(temporal_cloud_v1_approximate_backlog_count{
+            temporal_namespace="NAMESPACE", temporal_task_queue="orders"
+          })
+---
+# KEDA needs Temporal Cloud credentials only if you scale on CLOUD metrics
+# scraped by Prometheus. It does not talk to Temporal directly.
+#
+# NOT INCLUDED, and worth saying why: a trigger on worker slot availability.
+# temporal_worker_task_slots_available is emitted BY THE WORKERS, so scaling on
+# it is a feedback loop — add Workers, total slots rise, the metric improves,
+# and the autoscaler concludes it was right regardless of whether any task moved
+# faster. Scale on the QUEUE's state, not the fleet's.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: temporal-worker-scaling-notes
+  namespace: temporal-workers
+data:
+  README: |
+    Verify before trusting this autoscaler:
+
+    1. kubectl get scaledobject temporal-worker -n temporal-workers
+       READY=True, ACTIVE reflects load.
+
+    2. kubectl get hpa -n temporal-workers
+       KEDA creates the HPA. TARGETS must show a real number, not <unknown>.
+       <unknown> means the Prometheus query returns nothing — usually a
+       namespace/task_queue label that does not match, or the seconds vs
+       milliseconds mistake above.
+
+    3. Drive load and watch it act:
+         kubectl get hpa -n temporal-workers -w
+       Replicas should rise while schedule-to-start is high, and settle slowly
+       afterwards rather than snapping back.
+
+    4. Confirm the query returns data BEFORE relying on it:
+         curl -G http://prometheus:9090/api/v1/query --data-urlencode 'query=<the query above>'
+       An empty result is the difference between an autoscaler that is idle and
+       one that is broken, and KEDA reports both as ACTIVE=False.

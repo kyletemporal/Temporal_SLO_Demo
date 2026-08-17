@@ -9,3 +9,16 @@ __pycache__/
 # OS
 .DS_Store
 app-team/configured/
+
+# Terraform artefacts, at ANY depth.
+#
+# These patterns were previously only in terraform/.gitignore, which does not
+# cover aws/terraform/ — and a 776 MB provider binary was committed and rejected
+# by GitHub's 100 MB limit as a result. Scope gitignore rules to the repo, not to
+# the directory you happened to be working in.
+**/.terraform/
+**/.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
