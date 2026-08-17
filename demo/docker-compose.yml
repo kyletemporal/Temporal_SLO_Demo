@@ -99,6 +99,7 @@ services:
       TASK_QUEUE: orders
       HTTP_PORT: "8081"
       METRICS_PORT: "8077"
+      OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
     ports:
       - "8081:8081"
     networks: [tobs]
@@ -128,6 +129,8 @@ services:
       # NDE metric never reached Prometheus and the alert could not fire. Same
       # failure the metric itself teaches: the signal existed, nothing collected it.
       NDE_INJECT: "${NDE_INJECT:-}"
+      OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
+      PYROSCOPE_ADDRESS: http://pyroscope:4040
     # No published ports — this service gets scaled up and down during chaos
     # runs, and host port bindings would collide. Prometheus finds every
     # replica through Compose DNS instead (see prometheus.yml).
@@ -152,6 +155,9 @@ services:
       # is the most common way SLO dashboards end up lying about attainment.
       - --storage.tsdb.retention.time=15d
       - --web.enable-lifecycle
+      # Tempo's metrics_generator remote-writes span metrics here. Without this
+      # flag Prometheus rejects them and Tempo logs write failures every cycle.
+      - --web.enable-remote-write-receiver
     volumes:
       - ./prometheus:/etc/prometheus:ro
       - prom-data:/prometheus
@@ -268,6 +274,50 @@ services:
       - "9111:9111"
     networks: [tobs]
 
+  # ---------------------------------------------------------------------------
+  # Traces and profiles
+  #
+  # The third and fourth signals. Metrics say the SLI is burning; logs name the
+  # WorkflowID; a TRACE shows which Activity consumed the budget; a PROFILE shows
+  # which line inside it. Each answers a question the previous one cannot.
+  # ---------------------------------------------------------------------------
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:${OTELCOL_VERSION:-0.117.0}
+    container_name: tobs-otelcol
+    command: ["--config=/etc/otel/collector.yaml"]
+    environment:
+      # Stamped onto every span centrally, so a staging trace can never be
+      # mistaken for a production one during an incident.
+      DEPLOY_ENV: "${DEPLOY_ENV:-demo}"
+      TEMPORAL_NAMESPACE: "${TEMPORAL_NAMESPACE:-default}"
+    volumes:
+      - ./otel/collector.yaml:/etc/otel/collector.yaml:ro
+    depends_on: [tempo]
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+    networks: [tobs]
+
+  tempo:
+    image: grafana/tempo:${TEMPO_VERSION:-2.7.0}
+    container_name: tobs-tempo
+    command: ["-config.file=/etc/tempo/tempo.yaml"]
+    volumes:
+      - ./tempo/tempo.yaml:/etc/tempo/tempo.yaml:ro
+      - tempo-data:/var/tempo
+    ports:
+      - "3200:3200"
+    networks: [tobs]
+
+  pyroscope:
+    image: grafana/pyroscope:${PYROSCOPE_VERSION:-1.13.0}
+    container_name: tobs-pyroscope
+    volumes:
+      - pyroscope-data:/data
+    ports:
+      - "4040:4040"
+    networks: [tobs]
+
 # Error budgets are cumulative over a 28-day window, so they only mean something
 # if they survive a restart. Without these, `make down` erased every budget and
 # the SLO board silently started from pristine each session — the most common way
@@ -278,6 +328,8 @@ services:
 volumes:
   prom-data:
   loki-data:
+  tempo-data:
+  pyroscope-data:
 
 networks:
   tobs:

@@ -1,0 +1,44 @@
+apiVersion: 1
+
+datasources:
+  - name: Tempo
+    type: tempo
+    access: proxy
+    uid: tempo
+    url: http://tempo:3200
+    jsonData:
+      # The correlation triangle. Each link turns three separate tools into one
+      # investigation: a trace's logs are one click away, and a log line's trace
+      # is one click back.
+      tracesToLogsV2:
+        datasourceUid: loki
+        spanStartTimeShift: '-2m'
+        spanEndTimeShift: '2m'
+        filterByTraceID: false
+        filterBySpanID: false
+        # Match on task_queue rather than trace ID: the Go SDK logger does not
+        # inject trace IDs into log lines, so a trace-ID filter would silently
+        # return nothing. Narrowing by service and time is what actually works.
+        tags: [{ key: 'service.name', value: 'service' }]
+        customQuery: true
+        query: '{project="temporal-obs-demo", service=~".+"} |~ "$${__tags}"'
+      tracesToMetrics:
+        datasourceUid: prometheus
+        spanStartTimeShift: '-2m'
+        spanEndTimeShift: '2m'
+      tracesToProfiles:
+        datasourceUid: pyroscope
+        profileTypeId: 'process_cpu:cpu:nanoseconds:cpu:nanoseconds'
+      serviceMap:
+        datasourceUid: prometheus
+      nodeGraph:
+        enabled: true
+      search:
+        hide: false
+
+  - name: Pyroscope
+    type: grafana-pyroscope-datasource
+    access: proxy
+    uid: pyroscope
+    url: http://pyroscope:4040
+    jsonData: {}

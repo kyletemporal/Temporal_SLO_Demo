@@ -1,20 +1,46 @@
 package main
 
 import (
+	"context"
 	"log"
 
 	"go.temporal.io/sdk/client"
 	sdktally "go.temporal.io/sdk/contrib/tally"
+	"go.temporal.io/sdk/interceptor"
 	"go.temporal.io/sdk/worker"
 )
 
 func runWorker() {
 	scope := newPrometheusScope("0.0.0.0:" + env("METRICS_PORT", "8077"))
 
+	ctx := context.Background()
+
+	// Tracing and profiling are both additive and both fail open. A collector
+	// or profiling backend that is down must never stop a Worker from polling —
+	// observability that can take production with it is worse than none.
+	shutdownTracing, err := initTracing(ctx, "temporal-worker")
+	if err != nil {
+		log.Printf("WARN  tracing setup failed, continuing without it: %v", err)
+		shutdownTracing = func(context.Context) error { return nil }
+	}
+	defer func() { _ = shutdownTracing(ctx) }()
+
+	stopProfiling := initProfiling("temporal-worker")
+	startPprofServer("0.0.0.0:" + env("PPROF_PORT", "6060"))
+	defer stopProfiling()
+
+	var interceptors []interceptor.ClientInterceptor
+	if ti, err := tracingInterceptor(); err != nil {
+		log.Printf("WARN  tracing interceptor unavailable: %v", err)
+	} else {
+		interceptors = append(interceptors, ti)
+	}
+
 	c, err := dialTemporal(client.Options{
 		HostPort:       env("TEMPORAL_ADDRESS", "localhost:7233"),
 		Namespace:      env("TEMPORAL_NAMESPACE", "default"),
 		MetricsHandler: sdktally.NewMetricsHandler(scope),
+		Interceptors:   interceptors,
 	})
 	if err != nil {
 		log.Fatalln("unable to connect to Temporal:", err)

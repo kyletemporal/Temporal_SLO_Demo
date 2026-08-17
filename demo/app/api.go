@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"go.temporal.io/sdk/client"
+	"go.temporal.io/sdk/interceptor"
 	sdktally "go.temporal.io/sdk/contrib/tally"
 )
 
@@ -32,11 +33,24 @@ type startResponse struct {
 
 func runAPI() {
 	scope := newPrometheusScope("0.0.0.0:" + env("METRICS_PORT", "8077"))
+	startPprofServer("0.0.0.0:" + env("PPROF_PORT", "6060"))
+
+	// The client side matters as much as the Worker: StartWorkflowExecution is
+	// where the trace begins. Without the interceptor here, every Workflow trace
+	// is rootless and you cannot see the gap between "client asked" and "Worker
+	// started" — which is schedule-to-start, the first thing worth looking at.
+	var apiInterceptors []interceptor.ClientInterceptor
+	if ti, err := tracingInterceptor(); err != nil {
+		log.Printf("WARN  tracing interceptor unavailable: %v", err)
+	} else {
+		apiInterceptors = append(apiInterceptors, ti)
+	}
 
 	c, err := dialTemporal(client.Options{
 		HostPort:       env("TEMPORAL_ADDRESS", "localhost:7233"),
 		Namespace:      env("TEMPORAL_NAMESPACE", "default"),
 		MetricsHandler: sdktally.NewMetricsHandler(scope),
+		Interceptors:   apiInterceptors,
 	})
 	if err != nil {
 		log.Fatalln("unable to connect to Temporal:", err)

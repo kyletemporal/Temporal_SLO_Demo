@@ -1,0 +1,106 @@
+# OpenTelemetry Collector — receive, NORMALISE, redact, fan out.
+#
+# Workers could export straight to Tempo, so why run this? Because sampling,
+# redaction and attribute naming are decisions that belong OUTSIDE application
+# code. Changing any of them here does not require a Worker redeploy, and the
+# rules apply identically to Go, Java, TypeScript, Python and .NET Workers.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  # Bound memory so the collector cannot become the thing that takes the host
+  # down. Under pressure it sheds telemetry, which is the correct trade.
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 75
+    spike_limit_percentage: 20
+
+  # ---------------------------------------------------------------------------
+  # ATTRIBUTE NORMALISATION — this is what makes correlation automatic.
+  #
+  # The Temporal SDK tracing interceptor emits camelCase, non-OTel-convention
+  # attribute names. Verified by reading real spans out of Tempo, not assumed:
+  #
+  #     temporalWorkflowID   = order-tr2-1
+  #     temporalRunID        = 01a010b2-c250-72ea-b84b-b99782438077
+  #     temporalActivityID   = 5
+  #
+  # Two problems with consuming those directly. They do not match OTel semantic
+  # conventions, so no downstream tool knows what they mean; and they are an SDK
+  # implementation detail that can change under you.
+  #
+  # This copies them to dotted, conventional keys and KEEPS the originals, so
+  # dashboards written against either form keep working. Do the rename here and
+  # every SDK gets it for free.
+  # ---------------------------------------------------------------------------
+  transform/temporal_attributes:
+    error_mode: ignore
+    trace_statements:
+      - context: span
+        statements:
+          - set(attributes["temporal.workflow.id"], attributes["temporalWorkflowID"]) where attributes["temporalWorkflowID"] != nil
+          - set(attributes["temporal.run.id"], attributes["temporalRunID"]) where attributes["temporalRunID"] != nil
+          - set(attributes["temporal.activity.id"], attributes["temporalActivityID"]) where attributes["temporalActivityID"] != nil
+
+          # Span names carry the shape "RunActivity:ChargePayment". Splitting the
+          # kind out makes it filterable, which is the difference between
+          # "show me slow spans" and "show me slow ACTIVITIES".
+          - set(attributes["temporal.span.kind"], "workflow") where IsMatch(name, "^(Start|Run)Workflow:")
+          - set(attributes["temporal.span.kind"], "activity") where IsMatch(name, "^(Start|Run)Activity:")
+          - set(attributes["temporal.span.phase"], "start") where IsMatch(name, "^Start")
+          - set(attributes["temporal.span.phase"], "run") where IsMatch(name, "^Run")
+
+  # Environment and ownership, applied centrally so no Worker has to remember.
+  # deployment.environment is what stops a staging trace being read as production
+  # during an incident.
+  resource/environment:
+    attributes:
+      - key: deployment.environment
+        value: ${env:DEPLOY_ENV}
+        action: upsert
+      - key: service.namespace
+        value: ${env:TEMPORAL_NAMESPACE}
+        action: upsert
+
+  # Temporal payloads can carry customer data, and a span attribute is an easy
+  # way for it to leak into a system with weaker access controls than the
+  # Workflow history it came from. Redact at the boundary, not in every app.
+  attributes/redact:
+    actions:
+      - key: temporalPayloads
+        action: delete
+      - key: temporalWorkflowInput
+        action: delete
+      - key: temporalWorkflowResult
+        action: delete
+
+  batch:
+    timeout: 5s
+    send_batch_size: 512
+
+exporters:
+  otlp/tempo:
+    endpoint: tempo:4317
+    tls:
+      insecure: true
+
+service:
+  telemetry:
+    logs:
+      level: warn
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors:
+        - memory_limiter
+        - transform/temporal_attributes
+        - resource/environment
+        - attributes/redact
+        - batch
+      exporters: [otlp/tempo]

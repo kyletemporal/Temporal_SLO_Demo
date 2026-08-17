@@ -86,10 +86,12 @@ where this stops being three tools and starts being one workflow.
 1. **Sampling.** Head sampling will miss the slow executions we care most about;
    tail sampling needs collector state. What do we recommend for a Workflow that
    runs for a day?
-2. **Replay.** Does the interceptor suppress spans during replay? If not, a
-   Workflow that replays 50 times emits 50x the spans. This needs verifying
-   empirically, not from docs — the same discipline that caught `failure_reason`
-   vs `error_type`.
+2. ~~**Replay.** Does the interceptor suppress spans during replay?~~
+   **ANSWERED — yes.** Verified on this stack: started a Workflow with a 40s
+   Activity, restarted the Worker mid-flight to force a replay from history, and
+   compared spans before and after. One trace before, one after, every span name
+   appearing exactly once. The interceptor is replay-aware and does not re-emit.
+   This was the question that decided whether tracing was affordable at all.
 3. **Cost.** Traces are the most expensive signal per unit of insight. What
    sampling rate makes this affordable at the customer's volume?
 4. **Cloud.** Temporal Cloud does not export traces for server-side processing;

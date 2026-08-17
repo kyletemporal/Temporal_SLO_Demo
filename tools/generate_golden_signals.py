@@ -354,6 +354,29 @@ P.append(stat("Server-reported stuck detection", {"h": 6, "w": 2, "x": 22, "y": 
                                        {"color": GOOD, "value": 1}]},
     decimals=0, graph="none", novalue="monitor down?"))
 
+# =========================================================================
+# N — TRACES & PROFILES
+#
+# Span metrics come from Tempo's generator, which derives them from SAMPLED
+# traces. They are an ESTIMATE. The SDK metrics in the rows above are exact, and
+# where the two disagree the SDK metrics win. These exist to break latency down
+# BY SPAN — which the SDK metrics cannot do — not to serve as SLIs.
+# =========================================================================
+P.append(row("N — Traces & profiles  ·  where the time actually went", 69))
+
+P.append(ts("Span latency p95 by operation (from traces)", {"h": 7, "w": 12, "x": 0, "y": 70},
+    [tgt('histogram_quantile(0.95, sum by (le, span_name) (rate(traces_spanmetrics_latency_bucket[$__rate_interval])))',
+         legend="{{span_name}}")],
+    "s",
+    "p95 per span, derived from sampled traces by Tempo's metrics generator.\n\nESTIMATE, not an SLI — sampling makes it approximate, and the SDK histograms above are exact. Its value is the breakdown: this tells you WHICH activity is slow, which no SDK metric does.",
+    legend_mode="table", legend_place="right", fill=10))
+
+P.append(ts("Span throughput by operation", {"h": 7, "w": 12, "x": 12, "y": 70},
+    [tgt('sum by (span_name) (rate(traces_spanmetrics_calls_total[$__rate_interval]))', legend="{{span_name}}")],
+    "reqps",
+    "Calls per second per span. Useful for spotting an Activity being retried far more often than its siblings — a retry storm shows here as throughput without matching Workflow completions.\n\nTo find the executions themselves, use TraceQL:\n  { span.temporal.span.kind = \"activity\" && duration > 1s }",
+    legend_mode="table", legend_place="right", fill=10))
+
 dash = {
     "__inputs": [{"name": "DS_PROMETHEUS", "label": "Prometheus", "description": "",
                   "type": "datasource", "pluginId": "prometheus", "pluginName": "Prometheus"}],

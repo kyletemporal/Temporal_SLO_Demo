@@ -425,3 +425,57 @@ It now recreates the worker *service* with `NDE_INJECT=1`, keeping the DNS name.
 Verified end to end for the first time: the metric arrives with
 `failure_reason="NonDeterminismError"`, the alert reaches **firing**, and
 `verify-sdk-labels` passes on both label and value.
+
+---
+
+## Tracing and profiling (2026-08-17)
+
+OTel traces to Tempo via an OTel Collector; continuous profiling to Pyroscope;
+pprof on its own listener. **Metrics stay on Tally** — per the FR, switching them
+to OTel renames every series the rules and dashboards are built on.
+
+**The replay question is answered: the interceptor does NOT re-emit spans on
+replay.** Started a Workflow with a 40s Activity, restarted the Worker mid-flight
+to force replay from history, compared before and after: one trace before, one
+after, every span name exactly once. This was the open question that decided
+whether tracing was affordable, and it was verified rather than taken from docs.
+
+### Collector-side attribute normalisation
+
+The SDK emits camelCase, non-conventional attributes — read off real spans rather
+than assumed:
+
+```
+temporalWorkflowID / temporalRunID / temporalActivityID
+```
+
+The collector copies them to `temporal.workflow.id`, `temporal.run.id`,
+`temporal.activity.id`, adds `temporal.span.kind` (workflow/activity) and
+`temporal.span.phase` (start/run), and stamps `deployment.environment` and
+`service.namespace` onto every span. Originals are kept, so dashboards written
+against either form work. Doing it in the collector means every SDK gets it
+without an application change.
+
+Verified working: `{ span.temporal.workflow.id = "order-norm-1" }` returns the
+right trace, and `{ span.temporal.span.kind = "activity" && duration > 50ms }`
+returns slow activities.
+
+### Log → trace without trace IDs in logs
+
+The Go SDK logger does not inject trace IDs, so the usual `trace_id` derived
+field has nothing to match. The **WorkflowID is the join key**: logs print it and
+the normalised span attribute carries it, so a Loki derived field links to a
+TraceQL query. The query is verified; the Grafana deep-link URL format is
+version-sensitive and has not been clicked through in a browser.
+
+### Two bugs found while building
+
+- `resource.Merge(resource.Default(), resource.NewWithAttributes(semconv.SchemaURL, ...))`
+  fails with **"conflicting Schema URL"** whenever the app's semconv version
+  differs from the SDK's. `resource.NewSchemaless` merges with anything. Tracing
+  failed open exactly as designed — the Worker kept polling — which is why it was
+  a log line rather than an outage.
+- pprof could not mount on the metrics port: the tally Prometheus reporter owns
+  that server and exposes no mux. It now runs on its own port (6060), which is
+  the better arrangement anyway — the metrics port is scraped by anything on the
+  network and pprof must not be. Deliberately **not published** in compose.

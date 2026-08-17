@@ -17,6 +17,21 @@ datasources:
           matcherRegex: '(?:WorkflowID|workflow_id|wf-id)[=:\s"]+([\w\-\.:@]+)'
           url: 'http://localhost:8080/namespaces/default/workflows/${__value.raw}'
           urlDisplayLabel: 'Open in Temporal UI'
+        # LOG -> TRACE, without trace IDs ever appearing in a log line.
+        #
+        # The Go SDK logger does not inject trace IDs into its output, so the
+        # usual trace_id derived field has nothing to match. The WorkflowID is
+        # the join key instead: logs print it, and the collector normalises the
+        # span attribute to temporal.workflow.id so TraceQL can filter on it.
+        # Verified: that TraceQL query returns the right trace.
+        #
+        # The deep-link URL format is Grafana-version-sensitive. If it stops
+        # resolving, the query itself still works — paste it into Explore.
+        - name: TraceForWorkflow
+          matcherRegex: '(?:WorkflowID|workflow_id|wf-id)[=:\s"]+([\w\-\.:@]+)'
+          url: '/explore?left=%7B%22datasource%22%3A%22tempo%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22queryType%22%3A%22traceql%22%2C%22query%22%3A%22%7B%20span.temporal.workflow.id%20%3D%20%5C%22%24%24%7B__value.raw%7D%5C%22%20%7D%22%7D%5D%2C%22range%22%3A%7B%22from%22%3A%22now-3h%22%2C%22to%22%3A%22now%22%7D%7D'
+          urlDisplayLabel: 'Trace for this Workflow'
+
         - name: RunID
           matcherRegex: '(?:RunID|run_id|wf-run-id)[=:\s"]+([\w\-]+)'
           url: 'http://localhost:8080/namespaces/default/workflows/${__value.raw}'
