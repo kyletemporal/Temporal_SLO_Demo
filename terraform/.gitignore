@@ -1,0 +1,8 @@
+# State contains API key tokens in plaintext. Never commit it.
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+*.tfvars
+!*.tfvars.example
+crash.log
