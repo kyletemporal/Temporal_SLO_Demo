@@ -304,9 +304,12 @@ Expect `TemporalNonDeterminismError` to fire, and `[TMPRL1100]` in the Worker
 logs carrying `WorkflowID` and `RunID`. The Grafana **Find stuck executions**
 panel links each ID straight into the Temporal UI.
 
-One caveat this scenario prints itself: the replacement Worker is started with
-`docker compose run`, so it is **not** a Prometheus scrape target. Read the NDE
-from its `/metrics` or from the logs, not from the dashboards.
+Originally the replacement Worker was started with `docker compose run`, which
+does **not** get the `worker` service's DNS record — so Prometheus never scraped
+it, the NDE metric never arrived, and the alert could not fire. It now recreates
+the worker *service* instead, which keeps the DNS name. Verified end to end:
+`TemporalNonDeterminismError` fires, and `make verify-sdk-labels` confirms the
+`failure_reason="NonDeterminismError"` selector against the live series.
 
 **Reset between scenarios**, or you will read the tail of the previous one:
 

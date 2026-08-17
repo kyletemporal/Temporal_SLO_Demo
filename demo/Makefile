@@ -23,7 +23,13 @@ up: ## Build and start the full stack
 	@echo "  Next: make verify"
 
 .PHONY: down
-down: ## Stop the stack and remove volumes
+down: ## Stop the stack, KEEPING metrics and logs
+	@# No -v. Error budgets are cumulative over 28 days and are worthless if a
+	@# routine stop wipes them. `make reset` is the destructive one.
+	docker compose down
+
+.PHONY: reset
+reset: ## Stop the stack and DELETE all metrics, logs and database state
 	docker compose down -v
 
 .PHONY: logs
@@ -71,6 +77,10 @@ verify: ## Check that metrics are actually flowing end to end
 	@curl -sf 'http://localhost:9090/api/v1/query?query=count(poll_success_sync)' | \
 		python3 -c "import json,sys; r=json.load(sys.stdin)['data']['result']; \
 		print('    poll_success_sync:', r[0]['value'][1] if r else 'not yet emitted — run \`make smoke\`, wait ~15s, re-run \`make verify\`.\n      Still missing after traffic? The name varies by server version; see SETUP.md.')"
+
+.PHONY: verify-sdk-labels
+verify-sdk-labels: ## Check the shipped alerts match YOUR SDK's metric labels
+	bash scripts/verify-sdk-labels.sh
 
 .PHONY: validate
 validate: ## Full end-to-end check: containers, targets, rules, every panel, SLOs
@@ -182,16 +192,12 @@ chaos-nde: ## [7] Non-determinism — the failure Temporal cannot retry past
 	@echo "==> starting long-running workflows"
 	@for i in 1 2 3; do curl -sf -X POST localhost:8081/orders -H 'Content-Type: application/json' \
 	  -d "{\"orderId\":\"nde-$$i\",\"failureRate\":0,\"activityDelayMs\":45000,\"maxAttempts\":3,\"wait\":false}" >/dev/null || true; done
-	@echo "==> swapping in divergent worker code (NDE_INJECT=1)"
-	@docker compose stop worker >/dev/null 2>&1 || true
-	@docker compose run -d --rm -e NDE_INJECT=1 -e MODE=worker -e TEMPORAL_ADDRESS=temporal:7233 \
-	  -e TEMPORAL_NAMESPACE=default -e TASK_QUEUE=orders -e METRICS_PORT=8077 worker >/dev/null
-	@echo "    NOTE: this replacement Worker is NOT a Prometheus scrape target"
-	@echo "    (compose run containers are not resolved by the worker DNS name),"
-	@echo "    so read the NDE from its /metrics or the logs, not the dashboards."
+	@echo "==> recreating the worker with divergent code (NDE_INJECT=1)"
+	@NDE_INJECT=1 docker compose up -d --force-recreate worker >/dev/null 2>&1
+	@echo "    the worker service keeps its DNS name, so Prometheus still scrapes it"
+	@echo "    and TemporalNonDeterminismError can actually fire"
 	@echo "==> wait ~90s, then: make chaos-nde-stop"
 
 .PHONY: chaos-nde-stop
 chaos-nde-stop: ## Restore the normal Worker after chaos-nde
-	@docker rm -f $$(docker ps -q --filter "ancestor=temporal-obs-demo-worker") >/dev/null 2>&1 || true
-	@docker compose up -d worker >/dev/null && echo "normal worker restored"
+	@docker compose up -d --force-recreate worker >/dev/null 2>&1 && echo "normal worker restored"

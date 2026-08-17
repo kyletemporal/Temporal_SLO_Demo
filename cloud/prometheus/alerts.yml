@@ -24,7 +24,17 @@ groups:
           avg_over_time(temporal_cloud_v1_service_error_count[5m])
           /
           clamp_min(avg_over_time(temporal_cloud_v1_service_request_count[5m]), 0.001)
-          > 0.01
+          # 0.001, not 0.01. Alerting below 99.9% success matches Temporal's
+          # published guidance (Joshua Smith, Temporal Cloud Observability, and
+          # the docs' "alert if success rate <99.9%"). The previous 1% threshold
+          # let a sustained 0.5% error rate — a real problem — go unpaged.
+          #
+          # Measured on the demo stack before tightening: actual frontend error
+          # ratio was 0.000000%, so this is quiet in steady state. Client-caused
+          # errors are already excluded from the persistence rule below for the
+          # same reason; if this proves chatty in your environment, find out WHICH
+          # error types before loosening it back.
+          > 0.001
         for: 10m
         labels:
           severity: page

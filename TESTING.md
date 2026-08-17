@@ -396,3 +396,32 @@ budget exhausted, which is expected after a session of chaos runs.
 
 Worth checking whenever a new section is added: if a check prints its own
 verdict, it is not being counted.
+
+---
+
+## Four distribution decisions implemented (2026-08-17)
+
+1. **Frontend error threshold 1% → 0.1%** across demo, production and cloud,
+   matching Temporal's "<99.9% success" guidance. Measured actual on the demo
+   stack first: 0.000000%, so it is quiet in steady state.
+2. **`make verify-sdk-labels`** — checks the shipped alerts against *your* SDK's
+   real label names and units, instead of a code comment nobody reads before an
+   incident. It refuses to guess: the NDE label cannot be verified until a
+   Workflow Task has actually failed, and it says so rather than passing.
+3. **Named volumes for Prometheus and Loki**, and `make down` no longer passes
+   `-v`. Error budgets are cumulative over 28 days and were being erased by a
+   routine stop. `make reset` is now the destructive one.
+4. **MIT licence + an explicit "community, not Temporal-supported" statement.**
+
+### `chaos-nde` was not observable, which the verifier exposed
+
+The scenario started its divergent Worker with `docker compose run`. Prometheus
+finds Workers by `dns_sd` on the **`worker` service name**, and a `run` container
+does not get that record — so the NDE metric never reached Prometheus and
+`TemporalNonDeterminismError` could never fire. The scenario documented this as a
+caveat; it was really a defect.
+
+It now recreates the worker *service* with `NDE_INJECT=1`, keeping the DNS name.
+Verified end to end for the first time: the metric arrives with
+`failure_reason="NonDeterminismError"`, the alert reaches **firing**, and
+`verify-sdk-labels` passes on both label and value.

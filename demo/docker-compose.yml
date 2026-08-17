@@ -119,6 +119,15 @@ services:
       # difference between "not enough Workers" and "Workers configured too small".
       MAX_CONCURRENT_ACTIVITIES: "10"
       MAX_CONCURRENT_WORKFLOW_TASKS: "10"
+      # Set by `make chaos-nde`. Injects a command absent from open Workflows'
+      # histories so replay diverges. Empty in normal operation.
+      #
+      # Passed through the WORKER SERVICE rather than a `docker compose run`
+      # container on purpose: Prometheus finds Workers by dns_sd on the `worker`
+      # service name, and a run container does not get that DNS record — so the
+      # NDE metric never reached Prometheus and the alert could not fire. Same
+      # failure the metric itself teaches: the signal existed, nothing collected it.
+      NDE_INJECT: "${NDE_INJECT:-}"
     # No published ports — this service gets scaled up and down during chaos
     # runs, and host port bindings would collide. Prometheus finds every
     # replica through Compose DNS instead (see prometheus.yml).
@@ -130,8 +139,6 @@ services:
   prometheus:
     image: prom/prometheus:${PROMETHEUS_VERSION:-v3.1.0}
     container_name: tobs-prometheus
-    volumes:
-      - ./prometheus:/etc/prometheus:ro
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       # 15d, not the 6h this used to be. Error budgets are a question about a
@@ -145,6 +152,9 @@ services:
       # is the most common way SLO dashboards end up lying about attainment.
       - --storage.tsdb.retention.time=15d
       - --web.enable-lifecycle
+    volumes:
+      - ./prometheus:/etc/prometheus:ro
+      - prom-data:/prometheus
     ports:
       - "9090:9090"
     networks: [tobs]
@@ -199,6 +209,7 @@ services:
     command: -config.file=/etc/loki/loki-config.yaml
     volumes:
       - ./loki/loki-config.yaml:/etc/loki/loki-config.yaml:ro
+      - loki-data:/loki
     ports:
       - "3100:3100"
     healthcheck:
@@ -256,6 +267,17 @@ services:
     ports:
       - "9111:9111"
     networks: [tobs]
+
+# Error budgets are cumulative over a 28-day window, so they only mean something
+# if they survive a restart. Without these, `make down` erased every budget and
+# the SLO board silently started from pristine each session — the most common way
+# an SLO dashboard ends up lying about attainment.
+#
+# `make down` no longer removes them. Use `make reset` (or ./deploy.sh --clean)
+# when you actually want a blank slate.
+volumes:
+  prom-data:
+  loki-data:
 
 networks:
   tobs:

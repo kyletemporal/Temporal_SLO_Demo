@@ -27,6 +27,33 @@ internals at all. Use `production/` or `cloud/`, not both.
 
 ---
 
+## Support and licence
+
+**This is a community resource, not a Temporal-supported product.** It is not
+covered by any Temporal support agreement or SLA, and issues with it should not
+be raised as Temporal support tickets. Temporal's own community dashboards carry
+the same caveat, and this repo builds on them.
+
+Everything here is **starting material that you are expected to change**. Every
+threshold is a guess until it has been baselined against two weeks of your own
+data, and several alerts ship with `REPLACE_ME` markers precisely so they cannot
+be adopted by accident.
+
+Before trusting the SDK-metric alerts on your stack, run:
+
+```bash
+cd demo && make verify-sdk-labels
+```
+
+It checks that the shipped alerts match *your* SDK's actual label names and
+units. This is not boilerplate caution: the published non-determinism rule uses
+`error_type`, the Go SDK emits `failure_reason`, and copied verbatim that alert
+never fires. Latency units differ by language too — Go and Java emit seconds,
+TypeScript, Python and .NET emit milliseconds, and getting it wrong is a silent
+1000x error.
+
+Licensed under the [MIT Licence](LICENSE).
+
 ## Try it in one command
 
 ```bash
