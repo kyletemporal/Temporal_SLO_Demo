@@ -272,7 +272,7 @@ To switch to production semantics:
 3. Raise Prometheus retention past 28 days **and give it durable storage.**
 
 Point 3 is not optional and is the most commonly skipped step. Prometheus here
-runs at 15-day retention with **no volume mount**, so `make down` erases every
+runs at 15-day retention with a **named volume** (added 2026-08-17), so `make down` keeps every
 error budget. A budget that resets to pristine whenever the monitoring stack
 restarts will report perfect attainment through an outage it has simply
 forgotten. If you take one thing from this section: an error budget is only as

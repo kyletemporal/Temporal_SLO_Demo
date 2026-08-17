@@ -1,0 +1,138 @@
+{
+  "uid": "temporal-${slug}",
+  "title": "Temporal — ${team_name}",
+  "tags": ["temporal", "self-serve", "${slug}"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "type": "text",
+      "title": "How to read this board",
+      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 0 },
+      "options": {
+        "mode": "markdown",
+        "content": "Scoped to namespace **${namespace}**. Provisioned by Terraform — edits here are overwritten on the next apply; change the module inputs instead.\n\nThe panels are ordered by the question they answer: **is work being delivered to Workers** (schedule-to-start), **is it succeeding** (outcomes), **do Workers have capacity** (slots), and **what actually happened** (logs). Metrics deliberately carry no workflow_id — that is unbounded cardinality — so the log panel is the only place an execution ID appears."
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Activity schedule-to-start p99",
+      "description": "Time a task waits before a Worker picks it up. Usually the FIRST sign something is wrong, because it is upstream of almost everything else. Rising means Workers cannot keep up.\n\nIf ScheduleToStartTimeout is set in Activity Options it truncates this metric, so a badly backed-up queue reports a flat line instead of a rising one.",
+      "datasource": { "type": "prometheus", "uid": "${datasource_uid}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource_uid}" },
+          "expr": "histogram_quantile(0.99, sum by (le, task_queue) (rate(${latency_metric}{${selector}}[$__rate_interval])))",
+          "legendFormat": "{{task_queue}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "fillOpacity": 10, "lineWidth": 2 },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "#0ca30c", "value": null },
+              { "color": "#ec835a", "value": 0.2 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Workflow outcomes",
+      "description": "Completions and failures per second.\n\nActivity failures are NOT shown here on purpose: a healthy Temporal application absorbs them through retries, and alerting on them guarantees false pages. A Workflow that FAILS is a different class of event — retries were exhausted or never configured.",
+      "datasource": { "type": "prometheus", "uid": "${datasource_uid}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource_uid}" },
+          "expr": "sum(rate(workflow_success{${ns_selector}}[$__rate_interval]))",
+          "legendFormat": "completed"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "${datasource_uid}" },
+          "expr": "sum(rate(workflow_failed{${ns_selector}}[$__rate_interval]))",
+          "legendFormat": "failed"
+        },
+        {
+          "refId": "C",
+          "datasource": { "type": "prometheus", "uid": "${datasource_uid}" },
+          "expr": "sum(rate(workflow_timeout{${ns_selector}}[$__rate_interval]))",
+          "legendFormat": "timed out"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "reqps", "custom": { "fillOpacity": 10, "lineWidth": 2 } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "completed" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#0ca30c" } }] },
+          { "matcher": { "id": "byName", "options": "failed" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#d03b3b" } }] },
+          { "matcher": { "id": "byName", "options": "timed out" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#ec835a" } }] }
+        ]
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Worker task slots available",
+      "description": "Free execution slots on your Workers. Sustained zero means work is queuing.\n\nThis is what separates 'we need more Workers' from 'our Workers are configured too small'. Both look identical on schedule-to-start; only this panel plus host CPU tells them apart. If slots are zero and CPU is low, raise MaxConcurrentActivityExecutionSize rather than adding Workers.",
+      "datasource": { "type": "prometheus", "uid": "${datasource_uid}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource_uid}" },
+          "expr": "min by (task_queue, worker_type) (temporal_worker_task_slots_available{${selector}})",
+          "legendFormat": "{{task_queue}} / {{worker_type}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "fillOpacity": 10, "lineWidth": 2 },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "#d03b3b", "value": null },
+              { "color": "#0ca30c", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "type": "logs",
+      "title": "Recent errors — the only place an execution ID appears",
+      "description": "Error and warning lines from your Workers.\n\nEvery metric on this board refuses a workflow_id label because it is unbounded. Logs carry it in the LINE, so this is where you go from 'something is failing' to 'these executions are failing'. Non-determinism errors log with code TMPRL1100 and carry WorkflowID and RunID.",
+      "datasource": { "type": "loki", "uid": "${loki_uid}" },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 12 },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "loki", "uid": "${loki_uid}" },
+          "expr": "{namespace=\"${namespace}\"} |~ \"(?i)(error|warn|TMPRL)\"",
+          "queryType": "range"
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "enableLogDetails": true,
+        "sortOrder": "Descending",
+        "dedupStrategy": "none"
+      }
+    }
+  ]
+}

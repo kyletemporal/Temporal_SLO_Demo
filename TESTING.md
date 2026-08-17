@@ -67,7 +67,8 @@ Run end to end, more than once:
 
 ## Known gaps and open questions
 
-- **Prometheus has no durable volume.** `make down` erases every error budget.
+- ~~**Prometheus has no durable volume.** `make down` erases every error budget.~~
+  **Fixed 2026-08-17:** named volumes added and `make down` no longer passes `-v`. `make reset` is now the destructive one.
   Fine for a lab, wrong for anything real, and called out in the docs.
 - **Scenario 2 Phase A is miscalibrated.** It injects `failureRate: 0.6` with
   `maxAttempts: 3`, so ~22% of Workflows fail outright — in the phase the

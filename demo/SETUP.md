@@ -433,7 +433,7 @@ inside the stack.
 ### Starting completely over
 
 ```bash
-make down          # stops everything and removes volumes
+make down          # stop everything, KEEPING metrics, logs and traces
 make up
 ```
 
@@ -467,7 +467,8 @@ something that happens automatically on a customer's laptop before a demo.
 make help          # every available target
 make logs          # tail api + worker
 make verify        # re-check the pipeline any time
-make down          # stop everything, remove volumes
+make down          # stop everything, keeping data
+make reset         # stop and DELETE all metrics, logs and database state
 ```
 
 Driving the app directly:

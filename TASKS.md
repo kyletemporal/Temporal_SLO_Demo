@@ -67,6 +67,44 @@ routing. Rules route directly via `notification_settings.contact_point`.
    fast loop, roughly doubling Visibility query volume. Deliberate trade, recorded
    in `monitor/DESIGN.md`.
 
+## Requested: AWS integration
+
+Raised 2026-08-17. Not started — scoped here so it can be prioritised.
+
+**AWS Simple Workflow Service (SWF) migration.** SWF is Amazon's legacy workflow
+service and Temporal is the common migration target. What would earn its place:
+
+- A comparison of the execution models — SWF deciders vs Temporal Workflows,
+  activity task lists vs task queues, and where the semantics genuinely differ
+  rather than just renaming.
+- The observability delta specifically: SWF users are used to CloudWatch metrics
+  and have no equivalent of schedule-to-start or sync match rate. Mapping what
+  they lose and what they gain is the part this repo is well placed to write.
+- A migration-shaped chaos scenario, if one is meaningful.
+
+**AWS as a platform**, which is the broader and probably more useful half:
+
+- **EKS** — Worker deployments, HPA on schedule-to-start rather than CPU (CPU is
+  the wrong signal for a poller), and the Alloy DaemonSet pattern that replaces
+  this repo's compose-specific Docker-socket log collection.
+- **Lambda** — serverless Workers. Already covered in `demo/docs/`; worth
+  revisiting against the current Serverless Workers docs.
+- **S3 export sinks** — `temporalcloud_namespace_export_sink` supports S3 with
+  `aws_account_id`, `bucket_name`, `region`, `role_name` and optional `kms_arn`.
+  Workflow history archival for audit and compliance, provisionable in Terraform
+  today.
+- **IRSA / IAM roles for service accounts** — how Workers authenticate to AWS
+  services without static credentials.
+- **PrivateLink** via `temporalcloud_connectivity_rule`, for customers who cannot
+  route Temporal traffic over the public internet.
+- **CloudWatch vs Prometheus** — many AWS shops will want metrics in CloudWatch.
+  The OTel Collector already in `demo/` can fan out to both, which is the natural
+  place to add it.
+
+Suggested first slice: **S3 export sink + EKS Worker deployment**, since both are
+concrete, both are provisionable in Terraform, and both are things a platform
+team hits in week one rather than eventually.
+
 ## Open questions for the customer
 
 - **Sampling strategy for traces.** `AlwaysSample` is right for the lab and wrong
