@@ -16,6 +16,7 @@ Built against **provider v1.7.0** and validated with `terraform validate`.
 | `examples/01-namespace` | Single Namespace with search attributes |
 | `examples/02-team-onboarding` | Onboarding a team end to end |
 | `examples/03-observability` | Metrics access, and a ready-to-paste Prometheus scrape job |
+| `patterns/` | Four design patterns for multi-team use — see [`PATTERNS.md`](PATTERNS.md) |
 
 ## Honest status
 
@@ -73,6 +74,11 @@ provisions the custom search attributes that [`monitor/`](../monitor) queries fo
 duration SLOs. The three fit together: Terraform provisions the Namespace and the
 credential, `cloud/` alerts on what Temporal reports, and `monitor/` answers the
 duration question neither of them can.
+
+See [`PATTERNS.md`](PATTERNS.md) for design patterns that show up once more than
+one team uses Temporal Cloud: environment promotion, cross-team service
+boundaries via Nexus, zero-downtime credential rotation, and split ownership
+between a platform team and product teams.
 
 See [`BEST-PRACTICES.md`](BEST-PRACTICES.md) for the operational rules these
 modules encode and why each one exists.
