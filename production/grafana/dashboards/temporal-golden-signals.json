@@ -15,7 +15,68 @@
   "description": "Four golden signals (RED + Saturation) for a self-hosted Temporal Service, with SLO attainment and error budget burn on top.",
   "editable": true,
   "graphTooltip": 1,
-  "links": [],
+  "links": [
+    {
+      "asDropdown": false,
+      "icon": "external link",
+      "includeVars": false,
+      "keepTime": false,
+      "tags": [],
+      "targetBlank": true,
+      "title": "Slow activities",
+      "tooltip": "Activity spans over $trace_slow \u2014 dial the threshold in the header",
+      "type": "link",
+      "url": "/explore?schemaVersion=1&orgId=1&panes=%7B%22slow%22%3A%7B%22datasource%22%3A%22tempo%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22queryType%22%3A%22traceql%22%2C%22query%22%3A%22%7B%20span.temporal.span.kind%20%3D%20%5C%22activity%5C%22%20%26%26%20duration%20%3E%20${trace_slow}%20%7D%22%2C%22limit%22%3A20%2C%22tableType%22%3A%22traces%22%2C%22datasource%22%3A%7B%22type%22%3A%22tempo%22%2C%22uid%22%3A%22tempo%22%7D%7D%5D%2C%22range%22%3A%7B%22from%22%3A%22${__from}%22%2C%22to%22%3A%22${__to}%22%7D%7D%7D"
+    },
+    {
+      "asDropdown": false,
+      "icon": "external link",
+      "includeVars": false,
+      "keepTime": false,
+      "tags": [],
+      "targetBlank": true,
+      "title": "Failed spans",
+      "tooltip": "Errored spans. Empty on a healthy stack \u2014 `make chaos-failures` fills it",
+      "type": "link",
+      "url": "/explore?schemaVersion=1&orgId=1&panes=%7B%22errors%22%3A%7B%22datasource%22%3A%22tempo%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22queryType%22%3A%22traceql%22%2C%22query%22%3A%22%7B%20status%20%3D%20error%20%7D%22%2C%22limit%22%3A20%2C%22tableType%22%3A%22traces%22%2C%22datasource%22%3A%7B%22type%22%3A%22tempo%22%2C%22uid%22%3A%22tempo%22%7D%7D%5D%2C%22range%22%3A%7B%22from%22%3A%22${__from}%22%2C%22to%22%3A%22${__to}%22%7D%7D%7D"
+    },
+    {
+      "asDropdown": false,
+      "icon": "external link",
+      "includeVars": false,
+      "keepTime": false,
+      "tags": [],
+      "targetBlank": true,
+      "title": "Service graph",
+      "tooltip": "Who calls whom, with rate and latency per edge \u2014 built from spans, not config",
+      "type": "link",
+      "url": "/explore?schemaVersion=1&orgId=1&panes=%7B%22map%22%3A%7B%22datasource%22%3A%22tempo%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22queryType%22%3A%22serviceMap%22%2C%22serviceMapQuery%22%3A%22%22%2C%22datasource%22%3A%7B%22type%22%3A%22tempo%22%2C%22uid%22%3A%22tempo%22%7D%7D%5D%2C%22range%22%3A%7B%22from%22%3A%22${__from}%22%2C%22to%22%3A%22${__to}%22%7D%7D%7D"
+    },
+    {
+      "asDropdown": false,
+      "icon": "external link",
+      "includeVars": false,
+      "keepTime": false,
+      "tags": [],
+      "targetBlank": true,
+      "title": "All recent traces",
+      "tooltip": "No filter. Start here when you do not yet know what you are looking for",
+      "type": "link",
+      "url": "/explore?schemaVersion=1&orgId=1&panes=%7B%22all%22%3A%7B%22datasource%22%3A%22tempo%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22queryType%22%3A%22traceql%22%2C%22query%22%3A%22%7B%7D%22%2C%22limit%22%3A50%2C%22tableType%22%3A%22traces%22%2C%22datasource%22%3A%7B%22type%22%3A%22tempo%22%2C%22uid%22%3A%22tempo%22%7D%7D%5D%2C%22range%22%3A%7B%22from%22%3A%22${__from}%22%2C%22to%22%3A%22${__to}%22%7D%7D%7D"
+    },
+    {
+      "asDropdown": false,
+      "icon": "external link",
+      "includeVars": false,
+      "keepTime": false,
+      "tags": [],
+      "targetBlank": true,
+      "title": "CPU profiles",
+      "tooltip": "Where the Worker's CPU went, by function. Continuous \u2014 no repro needed",
+      "type": "link",
+      "url": "/explore?schemaVersion=1&orgId=1&panes=%7B%22prof%22%3A%7B%22datasource%22%3A%22pyroscope%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22queryType%22%3A%22both%22%2C%22profileTypeId%22%3A%22process_cpu%3Acpu%3Ananoseconds%3Acpu%3Ananoseconds%22%2C%22labelSelector%22%3A%22%7Bservice_name%3D%5C%22temporal-worker%5C%22%7D%22%2C%22groupBy%22%3A%5B%5D%2C%22datasource%22%3A%7B%22type%22%3A%22grafana-pyroscope-datasource%22%2C%22uid%22%3A%22pyroscope%22%7D%7D%5D%2C%22range%22%3A%7B%22from%22%3A%22${__from}%22%2C%22to%22%3A%22${__to}%22%7D%7D%7D"
+    }
+  ],
   "panels": [
     {
       "type": "row",
@@ -1338,7 +1399,7 @@
     },
     {
       "type": "row",
-      "title": "L \u2014 Logs  \u00b7  the only place an execution ID may live",
+      "title": "K \u2014 Worker cache  \u00b7  watch, do not page",
       "collapsed": false,
       "id": 21,
       "gridPos": {
@@ -1351,8 +1412,143 @@
     },
     {
       "type": "timeseries",
-      "title": "Log volume by service and level",
+      "title": "Sticky cache size vs forced evictions",
       "id": 22,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 43
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum by (namespace) (temporal_sticky_cache_size)",
+          "range": true,
+          "instant": false,
+          "refId": "A",
+          "legendFormat": "cached {{namespace}}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum by (namespace) (rate(temporal_sticky_cache_total_forced_eviction_total[$__rate_interval]))",
+          "range": true,
+          "instant": false,
+          "refId": "B",
+          "legendFormat": "forced evictions/s {{namespace}}"
+        }
+      ],
+      "description": "WATCH tier, not an alert.\n\nSticky cache size approaching WorkflowCacheSize drives forced evictions, and every eviction means the next Workflow Task replays the whole history instead of resuming from cache. That shows up as workflow task execution latency, not as an error \u2014 which is why it is worth plotting before it becomes a latency incident.\n\nTWO SCALES, TWO AXES. Cache size is a GAUGE (a count of cached executions); evictions are a RATE (per second). On a shared axis the eviction rate is invisible whenever the cache is non-trivially sized \u2014 which is exactly when you need to see it. Evictions are on the right axis, in red.\n\nA flat non-zero cache with zero evictions is the healthy state.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "short",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "axisSoftMin": 0
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "forced evictions.*"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "unit",
+                "value": "reqps"
+              },
+              {
+                "id": "custom.axisLabel",
+                "value": "evictions/s"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d03b3b"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "cached.*"
+            },
+            "properties": [
+              {
+                "id": "custom.axisLabel",
+                "value": "cached executions"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "L \u2014 Logs  \u00b7  the only place an execution ID may live",
+      "collapsed": false,
+      "id": 23,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 51
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Log volume by service and level",
+      "id": 24,
       "datasource": {
         "type": "loki",
         "uid": "loki"
@@ -1361,7 +1557,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 43
+        "y": 52
       },
       "targets": [
         {
@@ -1425,7 +1621,7 @@
     {
       "type": "logs",
       "title": "Temporal Service errors (infra)",
-      "id": 23,
+      "id": 25,
       "datasource": {
         "type": "loki",
         "uid": "loki"
@@ -1434,7 +1630,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 43
+        "y": 52
       },
       "description": "Server-side errors and warnings, JSON-parsed. This is where a persistence error or a shard problem explains a metric spike that the dashboards above can only show you the shape of.",
       "targets": [
@@ -1460,7 +1656,7 @@
     {
       "type": "logs",
       "title": "Find stuck executions (workflow IDs)",
-      "id": 24,
+      "id": 26,
       "datasource": {
         "type": "loki",
         "uid": "loki"
@@ -1469,16 +1665,16 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 43
+        "y": 52
       },
-      "description": "THE PANEL METRICS CANNOT REPLACE.\n\nSurfaces worker log lines for non-determinism and Workflow Task failures, which carry WorkflowID and RunID. The Loki datasource defines derived fields on both, so each ID is a link straight into the Temporal UI.\n\nOn servers below 1.30 (no TemporalReportedProblems) this is the primary route from a stuck-workflow alert to the affected executions.",
+      "description": "THE PANEL METRICS CANNOT REPLACE.\n\nSurfaces worker log lines for non-determinism and Workflow Task failures, which carry WorkflowID and RunID.\n\nTMPRL1100 = non-determinism; TMPRL1101 = deadlock detected during workflow run (a Workflow Task taking too long, usually a blocking call in Workflow code). Both codes verified present in this stack by forcing a real NDE with `make chaos-nde`. The Loki datasource defines derived fields on both, so each ID is a link straight into the Temporal UI.\n\nOn servers below 1.30 (no TemporalReportedProblems) this is the primary route from a stuck-workflow alert to the affected executions.",
       "targets": [
         {
           "datasource": {
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "{project=\"temporal-obs-demo\", service=\"worker\"} |~ \"(?i)(non.?determin|workflow task failed|panic|WorkflowTaskFailed)\"",
+          "expr": "{project=\"temporal-obs-demo\", service=\"worker\"} |~ \"TMPRL1100|TMPRL1101|(?i)(non.?determin|workflow task failed|deadlock detected|panic)\"",
           "queryType": "range",
           "refId": "A"
         }
@@ -1490,6 +1686,531 @@
         "enableLogDetails": true,
         "dedupStrategy": "none",
         "sortOrder": "Descending"
+      }
+    },
+    {
+      "type": "row",
+      "title": "M \u2014 Workflow duration SLO  \u00b7  the executions nothing else can see",
+      "collapsed": false,
+      "id": 27,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 60
+      },
+      "panels": []
+    },
+    {
+      "type": "stat",
+      "title": "Duration compliance",
+      "id": 28,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 5,
+        "x": 0,
+        "y": 61
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "slo:workflow_compliance:ratio",
+          "range": true,
+          "instant": false,
+          "refId": "A",
+          "legendFormat": "{{workflow_type}}"
+        }
+      ],
+      "description": "Closed-in-budget / (closed-in-budget + closed-over-budget + still running past 1x budget).\n\nThe third term is why terminating a stuck Workflow does NOT improve this number: the execution moves from that term to closed-over-budget and the ratio is unchanged. Verified end to end \u2014 5 executions moved and compliance held at 0.793336 exactly.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#d03b3b",
+                "value": null
+              },
+              {
+                "color": "#ec835a",
+                "value": 0.95
+              },
+              {
+                "color": "#0ca30c",
+                "value": 0.99
+              }
+            ]
+          },
+          "decimals": 2,
+          "noValue": "monitor down?"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto",
+        "justifyMode": "auto",
+        "wideLayout": true
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Open executions past budget",
+      "id": 29,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 10,
+        "x": 5,
+        "y": 61
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum by (bucket) (temporal_slo_over_budget_executions)",
+          "range": true,
+          "instant": false,
+          "refId": "A",
+          "legendFormat": "past {{bucket}}x budget"
+        }
+      ],
+      "description": "OPEN executions that have exceeded N x their duration budget.\n\nNo alert above this row can see these. They are Running, pollers are healthy, nothing has failed and nothing is retrying \u2014 only duration is wrong, and no Prometheus counter carries duration for an open execution.\n\nMeasured during `make chaos-stuck`: 0 -> 5 at buckets 1 and 2 while no other alert fired.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "short",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 16,
+            "showPoints": "never",
+            "spanNulls": false,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "axisSoftMin": 0
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#0ca30c",
+                "value": null
+              },
+              {
+                "color": "#ec835a",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Running executions",
+      "id": 30,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 5,
+        "x": 15,
+        "y": 61
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum by (workflow_type) (temporal_slo_running_executions)",
+          "range": true,
+          "instant": false,
+          "refId": "A",
+          "legendFormat": "{{workflow_type}}"
+        }
+      ],
+      "description": "Open executions by type. Deliberately NOT alertable on its own: this number scales with business volume, not with health. It is here as the denominator context for the panel to its left.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "short",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "axisSoftMin": 0
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Poll freshness",
+      "id": 31,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 2,
+        "x": 20,
+        "y": 61
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "time() - max(temporal_slo_last_successful_poll_timestamp_seconds)",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "description": "Age of the newest successful Visibility poll.\n\nTHIS PANEL GUARDS THE ROW. The monitor never publishes a zero when a query fails \u2014 it leaves the previous value in place, because a 0 would read as 'nothing is over budget' during exactly the outage when that is least likely to be true. The cost is that a frozen gauge looks perfectly healthy, and this is the only thing that reveals it.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#0ca30c",
+                "value": null
+              },
+              {
+                "color": "#ec835a",
+                "value": 120
+              },
+              {
+                "color": "#d03b3b",
+                "value": 300
+              }
+            ]
+          },
+          "decimals": 0,
+          "noValue": "no polls"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto",
+        "justifyMode": "auto",
+        "wideLayout": true
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Server-reported stuck detection",
+      "id": 32,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 2,
+        "x": 22,
+        "y": 61
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "max(temporal_slo_stuck_detection_available{method=\"reported_problems\"})",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "description": "1 = TemporalReportedProblems works here. 0 = it does not, so stuck_executions is NOT PUBLISHED AT ALL.\n\nAbsence rather than zero is deliberate: a stuck_executions gauge sitting at 0 on a server without the attribute is indistinguishable from a clean bill of health. Needs Server 1.30+ and, self-hosted, system.numConsecutiveWorkflowTaskProblemsToTriggerSearchAttribute \u2014 so on 1.27.4 this correctly reads 0.\n\nDuration buckets (left) work on every version and remain the primary signal.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#ec835a",
+                "value": null
+              },
+              {
+                "color": "#0ca30c",
+                "value": 1
+              }
+            ]
+          },
+          "decimals": 0,
+          "noValue": "monitor down?"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "auto",
+        "wideLayout": true
+      }
+    },
+    {
+      "type": "row",
+      "title": "N \u2014 Traces & profiles  \u00b7  where the time actually went",
+      "collapsed": false,
+      "id": 33,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 69
+      },
+      "panels": []
+    },
+    {
+      "type": "text",
+      "title": "Open in Explore \u2014 the query is already written",
+      "id": 34,
+      "gridPos": {
+        "h": 4,
+        "w": 24,
+        "x": 0,
+        "y": 70
+      },
+      "transparent": true,
+      "description": "Each button opens Explore on a pre-filled query, over the time range this dashboard is currently showing.\n\nThe panels below are span METRICS \u2014 aggregates derived from sampled traces. They tell you a CLASS of work got slower. Only a trace tells you which execution, and where inside it the time went. These buttons are the shortest path from one to the other.\n\nTWO THINGS THAT LOOK LIKE BREAKAGE AND ARE NOT:\n\n- An activity span times EXECUTION, not the queue wait before a Worker picked the task up. That wait is schedule-to-start, in rows D and S. During `make chaos-backlog` the fleet can be minutes behind while every activity span stays a few milliseconds, so 'Slow activities' correctly stays empty.\n\n- 'Failed spans' is empty whenever nothing has failed. `make chaos-failures` populates it.\n\nIf EVERY button lands on the Grafana home page instead of Explore, the viewer lacks the datasources:explore permission \u2014 see GF_USERS_VIEWERS_CAN_EDIT in docker-compose.yml.",
+      "options": {
+        "mode": "html",
+        "code": {
+          "language": "plaintext",
+          "showLineNumbers": false,
+          "showMiniMap": false
+        },
+        "content": "<div style=\"display:flex;gap:8px;flex-wrap:wrap;\">\n    <a href=\"/explore?schemaVersion=1&orgId=1&panes=%7B%22slow%22%3A%7B%22datasource%22%3A%22tempo%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22queryType%22%3A%22traceql%22%2C%22query%22%3A%22%7B%20span.temporal.span.kind%20%3D%20%5C%22activity%5C%22%20%26%26%20duration%20%3E%20${trace_slow}%20%7D%22%2C%22limit%22%3A20%2C%22tableType%22%3A%22traces%22%2C%22datasource%22%3A%7B%22type%22%3A%22tempo%22%2C%22uid%22%3A%22tempo%22%7D%7D%5D%2C%22range%22%3A%7B%22from%22%3A%22${__from}%22%2C%22to%22%3A%22${__to}%22%7D%7D%7D\" target=\"_blank\" rel=\"noopener\" style=\"\n        flex:1 1 0;min-width:150px;text-decoration:none;color:inherit;\n        display:block;padding:10px 12px;border-radius:3px;\n        border:1px solid rgba(127,127,127,.28);border-left:3px solid #d95926;\n        background:rgba(127,127,127,.08);transition:background .15s;\"\n       onmouseover=\"this.style.background='rgba(127,127,127,.18)'\"\n       onmouseout=\"this.style.background='rgba(127,127,127,.08)'\">\n      <div style=\"font-weight:600;font-size:13px;letter-spacing:.01em;\">Slow activities <span style=\"opacity:.5;\">&rarr;</span></div>\n      <div style=\"font-size:11px;line-height:1.35;opacity:.72;margin-top:3px;\">Activity spans over $trace_slow \u2014 dial the threshold in the header</div>\n    </a>\n    <a href=\"/explore?schemaVersion=1&orgId=1&panes=%7B%22errors%22%3A%7B%22datasource%22%3A%22tempo%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22queryType%22%3A%22traceql%22%2C%22query%22%3A%22%7B%20status%20%3D%20error%20%7D%22%2C%22limit%22%3A20%2C%22tableType%22%3A%22traces%22%2C%22datasource%22%3A%7B%22type%22%3A%22tempo%22%2C%22uid%22%3A%22tempo%22%7D%7D%5D%2C%22range%22%3A%7B%22from%22%3A%22${__from}%22%2C%22to%22%3A%22${__to}%22%7D%7D%7D\" target=\"_blank\" rel=\"noopener\" style=\"\n        flex:1 1 0;min-width:150px;text-decoration:none;color:inherit;\n        display:block;padding:10px 12px;border-radius:3px;\n        border:1px solid rgba(127,127,127,.28);border-left:3px solid #d03b3b;\n        background:rgba(127,127,127,.08);transition:background .15s;\"\n       onmouseover=\"this.style.background='rgba(127,127,127,.18)'\"\n       onmouseout=\"this.style.background='rgba(127,127,127,.08)'\">\n      <div style=\"font-weight:600;font-size:13px;letter-spacing:.01em;\">Failed spans <span style=\"opacity:.5;\">&rarr;</span></div>\n      <div style=\"font-size:11px;line-height:1.35;opacity:.72;margin-top:3px;\">Errored spans. Empty on a healthy stack \u2014 `make chaos-failures` fills it</div>\n    </a>\n    <a href=\"/explore?schemaVersion=1&orgId=1&panes=%7B%22map%22%3A%7B%22datasource%22%3A%22tempo%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22queryType%22%3A%22serviceMap%22%2C%22serviceMapQuery%22%3A%22%22%2C%22datasource%22%3A%7B%22type%22%3A%22tempo%22%2C%22uid%22%3A%22tempo%22%7D%7D%5D%2C%22range%22%3A%7B%22from%22%3A%22${__from}%22%2C%22to%22%3A%22${__to}%22%7D%7D%7D\" target=\"_blank\" rel=\"noopener\" style=\"\n        flex:1 1 0;min-width:150px;text-decoration:none;color:inherit;\n        display:block;padding:10px 12px;border-radius:3px;\n        border:1px solid rgba(127,127,127,.28);border-left:3px solid #3987e5;\n        background:rgba(127,127,127,.08);transition:background .15s;\"\n       onmouseover=\"this.style.background='rgba(127,127,127,.18)'\"\n       onmouseout=\"this.style.background='rgba(127,127,127,.08)'\">\n      <div style=\"font-weight:600;font-size:13px;letter-spacing:.01em;\">Service graph <span style=\"opacity:.5;\">&rarr;</span></div>\n      <div style=\"font-size:11px;line-height:1.35;opacity:.72;margin-top:3px;\">Who calls whom, with rate and latency per edge \u2014 built from spans, not config</div>\n    </a>\n    <a href=\"/explore?schemaVersion=1&orgId=1&panes=%7B%22all%22%3A%7B%22datasource%22%3A%22tempo%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22queryType%22%3A%22traceql%22%2C%22query%22%3A%22%7B%7D%22%2C%22limit%22%3A50%2C%22tableType%22%3A%22traces%22%2C%22datasource%22%3A%7B%22type%22%3A%22tempo%22%2C%22uid%22%3A%22tempo%22%7D%7D%5D%2C%22range%22%3A%7B%22from%22%3A%22${__from}%22%2C%22to%22%3A%22${__to}%22%7D%7D%7D\" target=\"_blank\" rel=\"noopener\" style=\"\n        flex:1 1 0;min-width:150px;text-decoration:none;color:inherit;\n        display:block;padding:10px 12px;border-radius:3px;\n        border:1px solid rgba(127,127,127,.28);border-left:3px solid #199e70;\n        background:rgba(127,127,127,.08);transition:background .15s;\"\n       onmouseover=\"this.style.background='rgba(127,127,127,.18)'\"\n       onmouseout=\"this.style.background='rgba(127,127,127,.08)'\">\n      <div style=\"font-weight:600;font-size:13px;letter-spacing:.01em;\">All recent traces <span style=\"opacity:.5;\">&rarr;</span></div>\n      <div style=\"font-size:11px;line-height:1.35;opacity:.72;margin-top:3px;\">No filter. Start here when you do not yet know what you are looking for</div>\n    </a>\n    <a href=\"/explore?schemaVersion=1&orgId=1&panes=%7B%22prof%22%3A%7B%22datasource%22%3A%22pyroscope%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22queryType%22%3A%22both%22%2C%22profileTypeId%22%3A%22process_cpu%3Acpu%3Ananoseconds%3Acpu%3Ananoseconds%22%2C%22labelSelector%22%3A%22%7Bservice_name%3D%5C%22temporal-worker%5C%22%7D%22%2C%22groupBy%22%3A%5B%5D%2C%22datasource%22%3A%7B%22type%22%3A%22grafana-pyroscope-datasource%22%2C%22uid%22%3A%22pyroscope%22%7D%7D%5D%2C%22range%22%3A%7B%22from%22%3A%22${__from}%22%2C%22to%22%3A%22${__to}%22%7D%7D%7D\" target=\"_blank\" rel=\"noopener\" style=\"\n        flex:1 1 0;min-width:150px;text-decoration:none;color:inherit;\n        display:block;padding:10px 12px;border-radius:3px;\n        border:1px solid rgba(127,127,127,.28);border-left:3px solid #d55181;\n        background:rgba(127,127,127,.08);transition:background .15s;\"\n       onmouseover=\"this.style.background='rgba(127,127,127,.18)'\"\n       onmouseout=\"this.style.background='rgba(127,127,127,.08)'\">\n      <div style=\"font-weight:600;font-size:13px;letter-spacing:.01em;\">CPU profiles <span style=\"opacity:.5;\">&rarr;</span></div>\n      <div style=\"font-size:11px;line-height:1.35;opacity:.72;margin-top:3px;\">Where the Worker's CPU went, by function. Continuous \u2014 no repro needed</div>\n    </a>\n</div>"
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Span latency p95 by operation (from traces)",
+      "id": 35,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 74
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (le, span_name) (rate(traces_spanmetrics_latency_bucket[$__rate_interval])))",
+          "range": true,
+          "instant": false,
+          "refId": "A",
+          "legendFormat": "{{span_name}}"
+        }
+      ],
+      "description": "p95 per span, derived from sampled traces by Tempo's metrics generator.\n\nESTIMATE, not an SLI \u2014 sampling makes it approximate, and the SDK histograms above are exact. Its value is the breakdown: this tells you WHICH activity is slow, which no SDK metric does.\n\nClick any series to open the slow traces behind it.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "s",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "axisSoftMin": 0
+          },
+          "links": [
+            {
+              "title": "Slowest traces for this span",
+              "targetBlank": true,
+              "url": "/explore?schemaVersion=1&orgId=1&panes=%7B%22span%22%3A%7B%22datasource%22%3A%22tempo%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22queryType%22%3A%22traceql%22%2C%22query%22%3A%22%7B%20name%20%3D%20%5C%22${__field.labels.span_name}%5C%22%20%26%26%20duration%20%3E%20${trace_slow}%20%7D%22%2C%22limit%22%3A20%2C%22tableType%22%3A%22traces%22%2C%22datasource%22%3A%7B%22type%22%3A%22tempo%22%2C%22uid%22%3A%22tempo%22%7D%7D%5D%2C%22range%22%3A%7B%22from%22%3A%22${__from}%22%2C%22to%22%3A%22${__to}%22%7D%7D%7D"
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Span throughput by operation",
+      "id": 36,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 74
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum by (span_name) (rate(traces_spanmetrics_calls_total[$__rate_interval]))",
+          "range": true,
+          "instant": false,
+          "refId": "A",
+          "legendFormat": "{{span_name}}"
+        }
+      ],
+      "description": "Calls per second per span. Useful for spotting an Activity being retried far more often than its siblings \u2014 a retry storm shows here as throughput without matching Workflow completions.\n\nClick any series to open that span's traces.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "reqps",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "axisSoftMin": 0
+          },
+          "links": [
+            {
+              "title": "Traces for this span",
+              "targetBlank": true,
+              "url": "/explore?schemaVersion=1&orgId=1&panes=%7B%22span%22%3A%7B%22datasource%22%3A%22tempo%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22queryType%22%3A%22traceql%22%2C%22query%22%3A%22%7B%20name%20%3D%20%5C%22${__field.labels.span_name}%5C%22%20%7D%22%2C%22limit%22%3A20%2C%22tableType%22%3A%22traces%22%2C%22datasource%22%3A%7B%22type%22%3A%22tempo%22%2C%22uid%22%3A%22tempo%22%7D%7D%5D%2C%22range%22%3A%7B%22from%22%3A%22${__from}%22%2C%22to%22%3A%22${__to}%22%7D%7D%7D"
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       }
     }
   ],
@@ -1518,6 +2239,63 @@
         "regex": "",
         "skipUrlSync": false,
         "type": "datasource"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": "50ms",
+          "value": "50ms"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Slow span >",
+        "multi": false,
+        "name": "trace_slow",
+        "options": [
+          {
+            "selected": false,
+            "text": "10ms",
+            "value": "10ms"
+          },
+          {
+            "selected": false,
+            "text": "25ms",
+            "value": "25ms"
+          },
+          {
+            "selected": true,
+            "text": "50ms",
+            "value": "50ms"
+          },
+          {
+            "selected": false,
+            "text": "100ms",
+            "value": "100ms"
+          },
+          {
+            "selected": false,
+            "text": "250ms",
+            "value": "250ms"
+          },
+          {
+            "selected": false,
+            "text": "500ms",
+            "value": "500ms"
+          },
+          {
+            "selected": false,
+            "text": "1s",
+            "value": "1s"
+          },
+          {
+            "selected": false,
+            "text": "5s",
+            "value": "5s"
+          }
+        ],
+        "query": "10ms,25ms,50ms,100ms,250ms,500ms,1s,5s",
+        "skipUrlSync": false,
+        "type": "custom"
       }
     ]
   },

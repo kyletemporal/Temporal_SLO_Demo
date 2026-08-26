@@ -110,6 +110,31 @@ The same contamination affected the shipped **alert** rules, not just the SLIs:
 long-poll's P95 sits permanently above any threshold and the alert fired
 forever on a healthy idle cluster. It now carries the same exclusion.
 
+#### The same mechanism collapses a success RATIO, not just a latency percentile
+
+An empty long-poll is not a failure either — it is a poller that had nothing to
+do. Over-provision the fleet and most polls wait the full 60s and return empty,
+so `poll_timeouts` swamps `poll_success` and **poll success rate collapses while
+the system is perfectly healthy**. Measured with `make chaos-poller-flood`: poll
+success rate fell from **0.9995 to 0.6812** while sync match rate went *up* to
+1.0000 and schedule-to-start P99 fell from 0.4539s to 0.0088s.
+
+**Checked deliberately: no SLI in this repo consumes poll success rate.** The
+nine SLIs are frontend/history/matching availability and latency, persistence
+availability, `workflow_completion`, and `worker_task_delivery` — and the last
+one is built on `temporal_activity_schedule_to_start_latency_seconds_bucket{le="0.2"}`,
+not on any poll counter.
+
+That matters more than it sounds. Had an SLI been defined on poll success rate,
+running scenario 8 would drain an error budget for a completely healthy system —
+on the very board being demoed, while the point being made is that the metric
+means nothing on its own. Verified during the scenario 8 run: `worker_task_delivery`
+budget did not move during the flood, because schedule-to-start *improved*.
+
+If you add an SLI on poll success rate, it needs the same second condition the
+alert has (see `TemporalMatchingStarved` in `prometheus/alerts.yml`) or it will
+burn budget every time the fleet is merely oversized.
+
 ### 2.2 Client errors are not service failures
 
 Matching emits a steady stream of `serviceerror_Canceled` on `AddWorkflowTask`

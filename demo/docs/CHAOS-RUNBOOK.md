@@ -21,10 +21,11 @@ Run them in order. Scenario 0 is not optional.
 | 5 | Worker blackout | `make chaos-blackout` | Worker fleet down | SDK panels go **blank**, cluster panels go red |
 | 6 | Stuck Workflows | `make chaos-stuck` | parked forever / infinite retry | **parked: NOTHING moves.** retry-storm: activity failures ↑ only |
 | 7 | Non-determinism | `make chaos-nde` | Workflow code changed under open executions | NDE alert fires, `TMPRL1100` in logs with WorkflowID |
+| 8 | **Poller flood** | `make chaos-poller-flood` | too MANY Workers for the offered load | poll success rate ↓↓ **and nothing else** — sync match stays 100% |
 
 ---
 
-## The four lessons worth landing
+## The five lessons worth landing
 
 ### 1. Two panels, one signal, two different fixes
 
@@ -134,6 +135,72 @@ Two things to say out loud when demoing this:
 Cleanup is **required**: `make chaos-stuck-release`. With no execution timeout
 these run until the stack is torn down.
 
+### 5. A collapsing rate can mean nothing is wrong
+
+Every other scenario here STARVES the fleet. `make chaos-poller-flood` runs it
+the other way: 20 Workers against 0.2 orders/sec, and **poll success rate
+collapses while the system is entirely healthy.**
+
+Measured on this stack:
+
+| | Baseline | Poller flood | |
+|---|---|---|---|
+| **Poll success rate** | **0.9995** | **0.6812** | collapsed through the 90% threshold |
+| **Sync match rate** | 0.6548 | **1.0000** | did NOT follow — it *improved* |
+| Schedule-to-start P99 | 0.4539 s | **0.0088 s** | 50x better |
+| Slots available | 4,017 | 23,400 | nothing saturated |
+| Empty polls/sec | 0.0278 | **0.6552** | ~23x more empty polls |
+| Empty share of all polls | ~0% | **31.9%** | |
+
+Not a controlled A/B: baseline is the repo's normal reference point (1 Worker,
+2 orders/sec) and the flood is 20 Workers at 0.2 orders/sec. What actually
+changed is the **ratio** — from roughly 2 pollers per offered order/sec to
+about 400, a 200x swing. The effect scales with that ratio, not with either
+number alone.
+
+**Why it happens.** A long-poll blocks for up to 60 seconds *by design*. Give
+the fleet more pollers than there is work and most polls wait the full window
+and return empty. `poll_timeouts` swamps `poll_success` and the ratio falls.
+Nothing failed. This is the same mechanism as the `TemporalFrontendLatencyHigh`
+false positive in the root README — there long-polls poison a latency
+percentile, here they collapse a success ratio.
+
+**Why it matters.** A starved fleet and a flooded fleet BOTH push poll success
+rate down, and they need **opposite** responses. Anyone alerting on that metric
+alone adds Workers during a flood and makes it worse.
+
+So the alert carries a second, independent condition:
+
+- **`TemporalMatchingStarved`** — poll success < 90% **AND** schedule-to-start
+  P99 > 200ms. It stayed **inactive for the entire flood**. That is its
+  acceptance test, and it is why this scenario exists.
+- **`TemporalWorkerFleetOverProvisioned`** — the same low poll success, but
+  with schedule-to-start near zero and sync match healthy. Reached **pending**
+  during the run. It is **`severity: info` deliberately**: this is a cost
+  finding, not an incident, and paging on it is exactly how a team learns to
+  scale up when it should scale down.
+
+This rule was previously `TemporalPollSuccessRateLow` and alerted on the ratio
+alone — its own description told you to check schedule-to-start first, but it
+did not encode that check, so it fired on a healthy cluster. Scenario 8 is what
+made that concrete.
+
+**Two traps worth naming.**
+
+`poll_timeouts` is **not** an async-match counter. Temporal exposes no
+async-match metric; async match is `poll_success - poll_success_sync`. Read
+`poll_timeouts` as async match and a flooded fleet looks exactly like a starved
+one — the conclusion inverts.
+
+Scope to your own Task Queue. Temporal's `temporal_sys_*` queues long-poll
+constantly and match almost nothing: on this stack `poll_timeouts` spans 68
+series across 6 namespaces while `poll_success` spans 26 across 2. Unscoped,
+poll success rate sits low permanently and barely moves during a real flood.
+
+Cleanup is **required**: `make chaos-poller-flood-reset`. Twenty Workers left
+running will absorb the backlog in scenarios 1 and 4 and make them look like
+they failed to reproduce.
+
 ---
 
 ## Suggested 30-minute demo flow
@@ -144,6 +211,7 @@ these run until the stack is torn down.
 | 0:05 | `make baseline`, leave running | You cannot tune an alert you have never baselined |
 | 0:12 | `make chaos-orphan` | The one panel with no false-positive mode |
 | 0:17 | `make chaos-backlog`, then `make scale-up` mid-run | Signal → action → recovery, closed loop |
+| 0:22 | `make chaos-poller-flood` *(optional)* | Same panel, opposite cause: a rate that collapses because nothing is wrong |
 | 0:24 | `make chaos-slots` + `docker stats` | Why "add more Workers" is often wrong |
 | 0:28 | `make chaos-blackout` | Absent Workers emit no metrics |
 | 0:32 | `make chaos-stuck` (then release) | Some failures move **no** metric at all — why Visibility polling exists |

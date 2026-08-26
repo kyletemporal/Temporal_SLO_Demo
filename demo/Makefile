@@ -94,6 +94,46 @@ smoke: ## Start a single order to confirm the app works
 		python3 -m json.tool
 
 # -----------------------------------------------------------------------------
+# Namespaces and Nexus
+#
+# scripts/tctl.sh wraps the temporal CLI so the address is always right —
+# auto-setup binds the Frontend to the container's eth0 address, so inside the
+# container 127.0.0.1 is refused. See docs/NEXUS.md.
+# -----------------------------------------------------------------------------
+.PHONY: nexus-doctor
+nexus-doctor: ## Check Nexus end to end — the callback config registration does NOT verify
+	@bash scripts/tctl.sh doctor
+
+.PHONY: ns-list
+ns-list: ## List Namespaces
+	@bash scripts/tctl.sh ns list
+
+.PHONY: ns-create
+ns-create: ## Create a Namespace: make ns-create NAME=payments [RETENTION=168h]
+	@test -n "$(NAME)" || { echo "usage: make ns-create NAME=<namespace> [RETENTION=168h]"; exit 2; }
+	@bash scripts/tctl.sh ns create "$(NAME)" --retention "$(or $(RETENTION),72h)"
+
+.PHONY: ns-delete
+ns-delete: ## Delete a Namespace AND every history in it: make ns-delete NAME=payments
+	@test -n "$(NAME)" || { echo "usage: make ns-delete NAME=<namespace>"; exit 2; }
+	@bash scripts/tctl.sh ns delete "$(NAME)"
+
+.PHONY: nexus-list
+nexus-list: ## List Nexus Endpoints
+	@bash scripts/tctl.sh nexus list
+
+.PHONY: nexus-create
+nexus-create: ## Create an Endpoint: make nexus-create EP=payments-api NS=payments TQ=billing
+	@test -n "$(EP)" -a -n "$(NS)" -a -n "$(TQ)" || \
+		{ echo "usage: make nexus-create EP=<endpoint> NS=<namespace> TQ=<task-queue>"; exit 2; }
+	@bash scripts/tctl.sh nexus create "$(EP)" --namespace "$(NS)" --task-queue "$(TQ)"
+
+.PHONY: nexus-delete
+nexus-delete: ## Delete an Endpoint: make nexus-delete EP=payments-api
+	@test -n "$(EP)" || { echo "usage: make nexus-delete EP=<endpoint>"; exit 2; }
+	@bash scripts/tctl.sh nexus delete "$(EP)"
+
+# -----------------------------------------------------------------------------
 # Chaos scenarios
 # -----------------------------------------------------------------------------
 .PHONY: baseline
@@ -124,8 +164,11 @@ chaos-blackout: ## [5] Worker blackout and recovery
 # Scaling helpers (used during scenarios 1 and 4)
 # -----------------------------------------------------------------------------
 .PHONY: scale-up
-scale-up: ## Scale to 5 workers — use mid-storm to show recovery
-	docker compose up -d --scale worker=5 worker
+# WORKERS defaults to 5 so the documented behaviour of this target is unchanged;
+# scenario 8 needs a much larger fleet and passes WORKERS=20 rather than
+# duplicating the scaling logic.
+scale-up: ## Scale workers up (default 5) — use mid-storm to show recovery. WORKERS=20 to override
+	docker compose up -d --scale worker=$(or $(WORKERS),5) worker
 
 .PHONY: scale-reset
 scale-reset: ## Back to 1 worker
@@ -201,3 +244,15 @@ chaos-nde: ## [7] Non-determinism — the failure Temporal cannot retry past
 .PHONY: chaos-nde-stop
 chaos-nde-stop: ## Restore the normal Worker after chaos-nde
 	@docker compose up -d --force-recreate worker >/dev/null 2>&1 && echo "normal worker restored"
+
+# Scenario 8 is the only one that runs the fleet in the OPPOSITE direction:
+# every other scenario starves it. WORKERS and DURATION are overridable —
+# the effect scales with the RATIO of pollers to offered work, not with either
+# number alone.
+.PHONY: chaos-poller-flood
+chaos-poller-flood: ## [8] Poller flood — healthy fleet, collapsing poll success rate
+	bash scripts/chaos-poller-flood.sh $(or $(WORKERS),20) $(or $(DURATION),10m)
+
+.PHONY: chaos-poller-flood-reset
+chaos-poller-flood-reset: ## REQUIRED cleanup for [8] — back to 1 Worker
+	bash scripts/chaos-poller-flood-reset.sh
