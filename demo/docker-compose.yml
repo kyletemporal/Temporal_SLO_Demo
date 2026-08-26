@@ -53,8 +53,18 @@ services:
       # Exposes the Prometheus scrape endpoint on :8000. Without this the
       # entire "Service Health" and "Persistence" half of the dashboard is dark.
       PROMETHEUS_ENDPOINT: 0.0.0.0:8000
+    volumes:
+      # Nexus callback configuration. auto-setup ships this path as an EMPTY
+      # file and polls it every 60s, so mounting over it is the supported way in
+      # to dynamic config — no image rebuild, no restart. See the file itself
+      # for what 1.27.4 already does by default and what it does not.
+      - ./temporal/dynamicconfig/development.yaml:/etc/temporal/config/dynamicconfig/docker.yaml:ro
     ports:
       - "7233:7233"   # gRPC — Frontend Service (also the health check port)
+      # HTTP API. Already enabled by auto-setup (httpPort 7243, no env var
+      # needed); publishing it is what makes Nexus callbacks and the HTTP API
+      # reachable from outside the Compose network.
+      - "7243:7243"   # HTTP — Nexus callbacks and the frontend HTTP API
       - "8000:8000"   # Prometheus metrics
     healthcheck:
       # NOT 127.0.0.1. auto-setup binds the Frontend to the container's own
@@ -174,7 +184,28 @@ services:
       GF_SECURITY_ADMIN_PASSWORD: admin
       GF_AUTH_ANONYMOUS_ENABLED: "true"
       GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      # WITHOUT THIS, EXPLORE IS UNREACHABLE FOR EVERY ANONYMOUS VISITOR.
+      #
+      # Grafana grants `datasources:explore` to Editor and above. A Viewer that
+      # opens /explore is denied by the route guard and REDIRECTED TO THE HOME
+      # PAGE — no error, no permission dialog, just a silent bounce that reads
+      # as a broken link.
+      #
+      # That killed every route into tracing at once: the trace buttons on the
+      # golden-signals board, the trace→logs and trace→profile links on the
+      # Tempo datasource, and any "view in Explore" on a panel menu.
+      #
+      # viewers_can_edit is the narrow fix — it adds the explorer role to
+      # Viewer. It permits editing in the UI, but nothing here is persisted:
+      # dashboards are provisioned read-only from disk, so an edit lasts until
+      # the page is reloaded. Making anonymous an Editor would be the heavier
+      # alternative and buys nothing extra.
+      GF_USERS_VIEWERS_CAN_EDIT: "true"
       GF_USERS_DEFAULT_THEME: dark
+      # Land on the Temporal overview instead of Grafana's stock welcome page.
+      # This is a PATH INSIDE THE CONTAINER, not a dashboard UID — pointing it
+      # at a uid silently falls back to the default home page with no error.
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/custom/temporal-overview.json
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro

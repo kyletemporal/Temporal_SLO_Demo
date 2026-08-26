@@ -1,11 +1,11 @@
 # TASKS
 
-Status as of 2026-08-17.
+Status as of 2026-08-24.
 
 ## Done
 
 **Demo stack** — runs on `temporalio/auto-setup` 1.27.4 (customer's version), every
-image tag parameterised. `make validate` passes **33/33, 0 warnings**.
+image tag parameterised. `make validate` passes **37/37, 0 warnings**.
 
 **Chaos scenarios (7)** — backlog, failures, orphan queue, slot saturation, worker
 blackout, **stuck workflows**, **non-determinism**. The last two were the gaps:
@@ -30,42 +30,83 @@ over-budget executions while no other alert fired.
 statement, `make verify-sdk-labels`, durable volumes, error threshold aligned to
 99.9%.
 
+## Added 2026-08-24
+
+**Tracing is reachable.** Five Explore deep links on the golden-signals board
+(slow activities, failed spans, service graph, all traces, CPU profiles), as
+header links and as a button panel, plus per-series data links. Each query
+verified against Tempo/Prometheus/Pyroscope. **The root cause was not the
+links**: `GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer` carries no `datasources:explore`,
+so Grafana's route guard silently redirected *every* `/explore` link — including
+the datasource's trace→logs and trace→profile links — to the home page. Fixed
+with `GF_USERS_VIEWERS_CAN_EDIT`. `validate.sh` §9 now checks the permission and
+re-runs every button's query; negative-tested against a clean Grafana.
+
+**`SECURITY.md`** — 19 findings, no Critical, no committed secrets. Two High,
+both demo-only and accepted with mitigations: the Docker socket in Alloy (`:ro`
+does *not* make the Docker API read-only) and 14 unauthenticated published ports.
+`govulncheck` against the toolchain the images actually build with: 6 reachable
+stdlib vulns in `demo/app`, 4 in `monitor`, all fixed by rebuilding on go1.25.13.
+
+**Nexus, self-hosted.** Callback dynamic config, port 7243 published, and
+`scripts/tctl.sh` + `make ns-*` / `nexus-*` for Namespace and Endpoint CRUD.
+Most of it was already on by default in 1.27.4. The trap `make nexus-doctor`
+exists to catch: **Endpoint registration succeeds with no callback config at
+all**, and only fails at first invocation.
+
+**`terraform/modules/namespace-selfhosted/`** — Namespaces on demand from one
+map, planned *and applied* against the live cluster. There is no provider for
+self-hosted Namespaces, so it drives the CLI.
+
+**`temporal-overview`** (the Grafana home dashboard) and
+**`temporal-full-overview`** — a row-for-row rebuild of Grafana Cloud's Temporal
+dashboard for self-hosted. Mapping in `docs/CLOUD-TO-SELFHOSTED.md`.
+
+**`aws/k8s/karpenter/`** and **`aws/k8s/worker/hpa.yaml`** — node provisioning
+against the Karpenter **v1** API, and a plain-HPA alternative to KEDA.
+
+`make validate` passes **37/37, 0 warnings**, stable across repeated runs.
+
 ## In flight
 
-**`terraform/modules/self-serve-observability/`** — INCOMPLETE, uncommitted.
+Nothing. The self-serve observability module listed here previously was
+completed in `ad7d184` — all of `variables.tf`, `outputs.tf` and
+`dashboard.json.tftpl` exist and the module validates.
 
-A module letting application teams provision their own Grafana folder, dashboard,
-alerts and paging from ~20 lines of tfvars, so the platform team is not the
-bottleneck for everyone else's observability.
-
-- Written: `main.tf` — folder, permissions, contact point, 3 alert rules
-  (schedule-to-start, workflow failure ratio, non-determinism), dashboard resource.
-- **Missing: `variables.tf`, `outputs.tf`, `dashboard.json.tftpl`.**
-- Does not validate yet — `main.tf` references variables and a template that do
-  not exist.
-
-Design decision already made and worth keeping: the module **never** creates a
+Design decision worth keeping visible: that module **never** creates a
 `grafana_notification_policy`, because that resource overwrites the entire tree
 and a per-team copy would make each team's apply erase every other team's
 routing. Rules route directly via `notification_settings.contact_point`.
 
 ## Next
 
-1. **Finish the self-serve module** — the three missing files, then validate.
-2. **`terraform plan` against a real Cloud account.** Everything in `terraform/`
-   validates and **nothing has been applied**. Validation proves the config is
-   well-formed and correctly typed, not that the API accepts a given combination.
-   This is the single biggest gap between "correct" and "trustworthy".
-3. **Verify the Grafana log→trace deep link in a browser.** The TraceQL query is
-   verified; the deep-link URL format is Grafana-version-sensitive and unclicked.
-4. **Confirm the NDE label on non-Go SDKs.** `failure_reason` is verified on Go +
-   tally only. If the customer's teams run Java/TS/Python, that critical alert may
-   be silently dead — `make verify-sdk-labels` is the tool, but it needs running
-   on their workers.
-5. **Burn-rate ladder for duration SLOs** (optional). Not computable from the
+1. **`terraform plan` against a real Cloud account.** Everything in
+   `terraform/` validates and **nothing has been applied**. Validation proves
+   the config is well-formed and correctly typed, not that the API accepts a
+   given combination. Still the single biggest gap between "correct" and
+   "trustworthy". (The *self-hosted* namespace module is now applied and
+   verified, including drift detection — the Cloud modules are not.)
+2. **Click one trace button in a browser.** Every query is verified server-side
+   and the permission bug is fixed, but one thing cannot be checked without a
+   browser: whether Grafana interpolates `${__from}` / `${__to}` / `${trace_slow}`
+   inside a **text-panel** `href`. If it does not, the links still open Explore
+   but land on the default time range instead of the dashboard's.
+3. **Confirm the NDE label on non-Go SDKs.** `failure_reason` is verified on Go
+   + tally only. If the customer's teams run Java/TS/Python, that critical alert
+   may be silently dead — `make verify-sdk-labels` is the tool, but it needs
+   running on their workers.
+4. **Apply the `aws/` manifests to a real EKS cluster.** Karpenter and the HPA
+   are written against verified APIs and parse cleanly; neither has been
+   applied. The Karpenter setting most likely to need tuning is
+   `consolidationPolicy` — watch `temporal_activity_execution_failed_total`
+   after a scale-down.
+5. **Rebuild images once go1.25.13 is published** to clear the 10 stdlib
+   vulnerabilities in `SECURITY.md` P8. `golang:1.25-alpine` is a floating tag,
+   so `docker compose build --no-cache` picks it up with no file change.
+6. **Burn-rate ladder for duration SLOs** (optional). Not computable from the
    monitor's point-in-time gauges; would need short-window closed counts on the
-   fast loop, roughly doubling Visibility query volume. Deliberate trade, recorded
-   in `monitor/DESIGN.md`.
+   fast loop, roughly doubling Visibility query volume. Deliberate trade,
+   recorded in `monitor/DESIGN.md`.
 
 ## Requested: AWS integration
 
@@ -84,9 +125,11 @@ service and Temporal is the common migration target. What would earn its place:
 
 **AWS as a platform**, which is the broader and probably more useful half:
 
-- **EKS** — Worker deployments, HPA on schedule-to-start rather than CPU (CPU is
-  the wrong signal for a poller), and the Alloy DaemonSet pattern that replaces
-  this repo's compose-specific Docker-socket log collection.
+- **EKS** — ~~Worker deployments, HPA on schedule-to-start rather than CPU~~
+  **DONE** (`aws/k8s/`): Deployment, PDB, IRSA, KEDA *and* plain-HPA autoscaling,
+  plus Karpenter node provisioning. Still open: the **Alloy DaemonSet** pattern
+  that replaces this repo's compose-specific Docker-socket log collection —
+  which is also SECURITY.md finding D1, the highest-severity one in the repo.
 - **Lambda** — serverless Workers. Already covered in `demo/docs/`; worth
   revisiting against the current Serverless Workers docs.
 - **S3 export sinks** — `temporalcloud_namespace_export_sink` supports S3 with

@@ -29,6 +29,19 @@ internals at all. Use `production/` or `cloud/`, not both.
 
 ---
 
+## Security
+
+`demo/` is a **lab**, not a deployment template. It authenticates nobody,
+encrypts nothing and publishes fourteen ports — appropriate for one laptop and
+one demo, and dangerous anywhere else.
+
+**[SECURITY.md](SECURITY.md)** carries the full risk register, the reasoning
+behind each accepted risk, a hardening checklist to work through before any of
+this touches an environment, and reproducible commands for every scan behind it.
+Read it before adapting `demo/`.
+
+---
+
 ## Support and licence
 
 **This is a community resource, not a Temporal-supported product.** It is not
@@ -64,7 +77,7 @@ cd demo
 ```
 
 Checks prerequisites and ports, builds, waits for every service to be genuinely
-ready, seeds traffic, and runs 26 validation checks. Takes a few minutes on
+ready, seeds traffic, and runs 37 validation checks. Takes a few minutes on
 first build (Go modules + images). Then:
 
 | | |
@@ -73,11 +86,19 @@ first build (Go modules + images). Then:
 | Prometheus | <http://localhost:9090> |
 | Temporal UI | <http://localhost:8080> |
 
-Dashboards: **Golden Signals (RED + Saturation)**, **SLO Board — Error Budgets**,
-and the original **Service & Worker Overview**.
+Dashboards: **Overview** (the home page), **Full Overview (self-hosted)**,
+**Golden Signals (RED + Saturation)**, **SLO Board — Error Budgets**, and the
+original **Service & Worker Overview**.
+
+**Full Overview** is a row-for-row rebuild of Grafana Cloud's Temporal
+dashboard for a self-hosted cluster. A direct port does not work — wrong
+schema, `temporal_cloud_v1_*` metrics that do not exist, gauges where
+self-hosted has counters, and three different label spellings for "task queue".
+What was translated, replaced and dropped is in
+[`docs/CLOUD-TO-SELFHOSTED.md`](docs/CLOUD-TO-SELFHOSTED.md).
 
 ```bash
-make validate       # re-run all 26 checks any time
+make validate       # re-run all 37 checks any time
 make chaos-slots    # watch an error budget drain
 make chaos-stuck    # the one where nothing moves — and that IS the finding
 make chaos-stuck-release   # required cleanup
@@ -117,7 +138,28 @@ result. A few that changed the numbers:
 
 Docs: [`demo/docs/SLO-GUIDE.md`](demo/docs/SLO-GUIDE.md) ·
 [`demo/docs/CHAOS-RUNBOOK.md`](demo/docs/CHAOS-RUNBOOK.md) ·
+[`demo/docs/NEXUS.md`](demo/docs/NEXUS.md) ·
 [`production/docs/SERVERLESS-WORKERS.md`](production/docs/SERVERLESS-WORKERS.md)
+
+---
+
+## Namespaces and Nexus
+
+The demo cluster ships with Nexus configured — cross-Namespace calls through a
+named Endpoint, so two teams integrate without sharing a Namespace.
+
+```bash
+cd demo
+make nexus-doctor                  # verify the setup end to end
+make ns-create NAME=payments RETENTION=168h
+make nexus-create EP=payments-api NS=payments TQ=billing
+```
+
+The trap it exists to catch: **registering an Endpoint succeeds even when the
+callback configuration is missing entirely**, and the failure only appears at
+the first real Operation invocation. `make nexus-doctor` checks what
+registration does not. Details, including the 1.30 config change and what a
+stock `auto-setup` already does for you, in [`demo/docs/NEXUS.md`](demo/docs/NEXUS.md).
 
 ---
 
@@ -129,7 +171,7 @@ component called the Worker Controller Instance — there is no idle polling and
 no fleet to provision.
 
 **Self-hosting it requires Temporal Service v1.31.0 or later.** The demo here
-pins **1.26.2**, so it cannot run Serverless Workers without a server upgrade.
+pins **1.27.4**, so it cannot run Serverless Workers without a server upgrade.
 
 Ephemeral Workers also invalidate specific rules in this repo — `absence` alerts
 page constantly when scale-to-zero is the normal state, `task_delivery` becomes
@@ -179,7 +221,7 @@ python3 tools/generate_app_team_dashboard.py   # app-team dashboard
 
 ## Status
 
-Verified end to end on macOS + Docker Desktop against Temporal Server 1.26.2,
+Verified end to end on macOS + Docker Desktop against Temporal Server 1.27.4,
 Go SDK 1.47, Prometheus 3.1, Grafana 11.5, k6 0.55.
 
 **This is a teaching rig, not a production template.** Single-node Postgres, no
