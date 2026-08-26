@@ -137,6 +137,28 @@ spec:
             capabilities:
               drop: ["ALL"]
 
+      # Land on the Karpenter NodePool in ../karpenter/nodepool.yaml, which
+      # taints its nodes workload=temporal-worker:NoSchedule.
+      #
+      # BOTH halves are needed and they do different jobs: the toleration lets
+      # this pod onto the tainted nodes, the nodeSelector stops it landing
+      # anywhere else. With only the toleration, Workers schedule onto whatever
+      # general-purpose node has room — and inherit that pool's consolidation
+      # policy, which is exactly the "someone else decides when my Activities
+      # get killed" problem the dedicated NodePool exists to avoid.
+      #
+      # DELETE BOTH if you are not running the Karpenter NodePool. An
+      # unsatisfiable nodeSelector leaves every Worker pod Pending, the task
+      # queue goes unpolled, and nothing in Temporal reports an error — it just
+      # stops making progress.
+      tolerations:
+        - key: workload
+          operator: Equal
+          value: temporal-worker
+          effect: NoSchedule
+      nodeSelector:
+        workload: temporal-worker
+
       # Spread across AZs. A Worker fleet in one AZ is a fleet that a single AZ
       # event takes to zero, and Temporal will happily keep queuing tasks for it.
       topologySpreadConstraints:

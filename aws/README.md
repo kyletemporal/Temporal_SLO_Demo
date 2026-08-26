@@ -7,7 +7,8 @@ right signal.
 | | |
 |---|---|
 | [`terraform/export-sink`](terraform/export-sink) | S3 bucket, IAM role and the Temporal Cloud export sink |
-| [`k8s/worker`](k8s/worker) | Worker Deployment, IRSA service account, PDB, and KEDA autoscaling |
+| [`k8s/worker`](k8s/worker) | Worker Deployment, IRSA service account, PDB, and **two** autoscaling options — KEDA (`scaledobject.yaml`) or a plain HPA (`hpa.yaml`) |
+| [`k8s/karpenter`](k8s/karpenter) | NodePool + EC2NodeClass provisioning the nodes underneath the fleet |
 
 ## Verification status
 
@@ -138,6 +139,67 @@ Replicas should rise while schedule-to-start is high, and settle **slowly**
 afterwards rather than snapping back — scale-up is immediate, scale-down uses a
 10-minute stabilisation window, because dropping a Worker mid-Activity creates
 the very latency the autoscaler exists to prevent.
+
+### KEDA or a plain HPA — pick one, never both
+
+`scaledobject.yaml` (KEDA) and `hpa.yaml` (plain HPA) do the same job with the
+same signal. **Applying both makes them fight**: KEDA creates its own HPA for
+the same Deployment, two controllers own `replicas`, and the fleet oscillates.
+
+| | KEDA | Plain HPA |
+|---|---|---|
+| Reads Prometheus | directly | **only via the Prometheus Adapter** — an extra APIService in the control plane |
+| Objects to manage | one CRD | HPA + adapter rule + APIService |
+| Failure mode | ScaledObject `READY=False` | HPA sits at `<unknown>` and silently stops scaling |
+
+Use KEDA unless you cannot install it. The plain HPA earns its place when your
+platform team forbids new operators, or you already run the adapter.
+
+Two details the HPA version gets wrong easily, both silent:
+
+- **`AverageValue`, not `Value`.** `Value` ignores replica count, so the HPA has
+  no model of what adding a pod does — it overshoots to `maxReplicas` and
+  oscillates. `AverageValue` gives `desired = ceil(replicas × current / target)`.
+- **A `metricSelector` scoping to one Task Queue.** Without it the adapter
+  aggregates every queue into one number, and a healthy queue masks a starved one.
+
+### Karpenter: consolidation has the same blind spot as CPU autoscaling
+
+`k8s/karpenter/nodepool.yaml` is written against **`karpenter.sh/v1`** and
+**`karpenter.k8s.aws/v1`**. Karpenter went v1 in August 2024; v1beta1 manifests
+do not apply. Two changes break a copied v1beta1 file outright: `kubelet` config
+moved from NodePool to EC2NodeClass, and `amiSelectorTerms` became **required**.
+
+The reason this file needs care is the same inversion as the autoscaler:
+
+> Consolidation removes **underutilized** nodes. A Worker holding a 20-minute
+> Activity while waiting on a slow downstream API is, by every resource measure
+> Karpenter can see, idle. It is the most expensive pod on the cluster to kill
+> and it looks like the cheapest.
+
+Killing it becomes an Activity timeout and a retry — so aggressive consolidation
+manufactures the very backlog the autoscaler exists to prevent, during the quiet
+periods when consolidation is most eager. Hence:
+
+| Setting | Why |
+|---|---|
+| `consolidationPolicy: WhenEmpty` | Not the `WhenEmptyOrUnderutilized` default. Choose by Activity length — seconds-long Activities can use the default and enjoy the bin-packing. |
+| `terminationGracePeriod: 1h` | **The most important field.** The ceiling on draining, including `do-not-disrupt` pods. Set it above your longest Activity `StartToCloseTimeout`. |
+| `consolidateAfter: 5m` | Not zero. Deploys briefly empty a node; it should not be destroyed and re-provisioned. |
+| `budgets` | Caps voluntary disruption at 20%, and blocks it entirely during business hours. Without a budget, a drift or `expireAfter` wave can cycle the whole fleet at once and leave the queue unpolled. |
+| `on-demand` only | Spot suits Workers *if* Activities are short, idempotent and heartbeating. Otherwise each interruption costs a full `StartToCloseTimeout` stall, invisible as an error and visible only as latency. |
+| `httpPutResponseHopLimit: 1` | Stops a container reaching IMDS and assuming the **node** role, which would bypass IRSA entirely. |
+
+**`karpenter.sh/do-not-disrupt: "true"` on the Deployment is a trap.** No node
+ever consolidates, the fleet never shrinks, and you pay peak capacity forever —
+and it still does not survive `terminationGracePeriod`. Use the PodDisruptionBudget
+(already in `worker-deployment.yaml`), or the annotation's *duration* form set by
+the app around long Activities.
+
+The Deployment carries a matching `toleration` + `nodeSelector` for this
+NodePool. **Delete both if you are not running Karpenter** — an unsatisfiable
+`nodeSelector` leaves every Worker Pending, the queue unpolled, and nothing in
+Temporal reports an error.
 
 ### Logs on EKS
 
