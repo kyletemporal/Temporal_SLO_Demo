@@ -48,16 +48,30 @@ to paper over Workflows that were never given deadlines.
 ## 2. Blocking finding: `TemporalReportedProblems` availability
 
 The definitive stuck query depends on a search attribute that is **not
-universally available**. Verified against the demo cluster **as it stood at the
-time, Server 1.26.2**: `temporal operator search-attribute list` does not
-include it.
+universally available**. `temporal operator search-attribute list` does not
+include `TemporalReportedProblems`.
 
-> The demo has since moved to **1.27.4** and this finding has **not been
-> re-verified there**. It is expected to still hold — `TemporalReportedProblems`
-> needs Server 1.30+ — and the monitor reports its own answer at runtime via
-> `temporal_slo_stuck_detection_available{method="reported_problems"}` (1 = the
-> attribute works here, 0 = it does not, in which case `stuck_executions` is not
-> published at all). Trust that gauge over this paragraph.
+Verified twice, on both server versions this demo has pinned:
+
+| Server | Method | Result |
+|---|---|---|
+| 1.26.2 | `search-attribute list` | absent |
+| **1.27.4** | `search-attribute list`, all **29** system attributes enumerated | **absent** |
+| **1.27.4** | monitor's own runtime gauge | `temporal_slo_stuck_detection_available{method="reported_problems"} = 0` |
+
+The two independent checks on 1.27.4 agree, and the sibling gauge
+`{method="duration_buckets"} = 1` confirms the fallback path is live — so the
+monitor is not simply failing to report.
+
+`TemporalReportedProblems` needs Server **1.30+**, so this holds for every
+version below that, not just the two measured here.
+
+> **Trust the gauge over this table.** The monitor answers the question at
+> runtime for whatever cluster it is pointed at: `1` = the attribute works here,
+> `0` = it does not, in which case `stuck_executions` is **not published at
+> all** — absence rather than a zero, because a `stuck_executions` gauge sitting
+> at 0 on a server without the attribute is indistinguishable from a clean bill
+> of health.
 
 | | |
 |---|---|
