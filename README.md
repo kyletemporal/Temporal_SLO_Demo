@@ -6,7 +6,7 @@ Four bundles and a toolbox:
 
 | | What it is | Use it to |
 |---|---|---|
-| **`demo/`** | A complete stack that runs on a laptop: Temporal, Postgres, Prometheus, Grafana, a Go app, and seven chaos scenarios | *See* what a backlog, a starved Worker and an orphaned Task Queue look like before you meet one at 2am |
+| **`demo/`** | A complete stack that runs on a laptop: Temporal, Postgres, Prometheus, Grafana, a Go app, and eight chaos scenarios | *See* what a backlog, a starved Worker and an orphaned Task Queue look like before you meet one at 2am |
 | **`production/`** | Rules and dashboards for a **self-hosted** cluster, no demo app | Drop into a real self-hosted deployment |
 | **`cloud/`** | Rules and dashboards for **Temporal Cloud**, built on the Cloud SLA | Monitor a Cloud Namespace and build SLOs on top of Temporal's |
 | **`aws/`** | S3 Workflow-history export and EKS Worker deployment with KEDA autoscaling | Keep history past the 90-day cap; run Workers that scale on the right signal |

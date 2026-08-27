@@ -115,7 +115,7 @@ TypeScript users: pre-bundle Workflow code with `workflowBundle` rather than
 
 **This is the gating fact for this repo.** Serverless Workers require
 **Temporal Service v1.31.0 or later**. The demo in this repository pins
-**1.26.2**, so it cannot run them without a server upgrade.
+**1.27.4**, so it cannot run them without a server upgrade.
 
 The WCI is **disabled by default** and enabled through dynamic config:
 

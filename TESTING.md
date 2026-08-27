@@ -10,10 +10,10 @@ the "not verified" list before filing anything — some of it is already known.
 ```bash
 cd demo
 ./deploy.sh --clean      # ~5 min on first build
-make validate            # 26 checks: containers, targets, rules, every panel, SLOs
+make validate            # 37 checks: containers, targets, rules, every panel, SLOs, trace links
 ```
 
-`make validate` should end `passed: 26  failed: 0`. If it does not, that is the
+`make validate` should end `passed: 37  failed: 0`. If it does not, that is the
 most useful bug report you can send — paste the whole output.
 
 Then open Grafana and drive it:

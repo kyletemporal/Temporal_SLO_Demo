@@ -9,7 +9,7 @@ infrastructure-as-code — organised as independent bundles rather than one syst
 
 | Directory | Scope | Prefix |
 |---|---|---|
-| `demo/` | Runnable laptop stack: Temporal, Postgres, Prometheus, Grafana, Loki, Tempo, Pyroscope, a Go app, 7 chaos scenarios | `slo:` |
+| `demo/` | Runnable laptop stack: Temporal, Postgres, Prometheus, Grafana, Loki, Tempo, Pyroscope, a Go app, 8 chaos scenarios | `slo:` |
 | `production/` | Self-hosted cluster rules + dashboards, no demo app | `slo:` |
 | `cloud/` | Temporal Cloud, built on the Cloud SLA | `cloudslo:` |
 | `app-team/` | Minimum standard for teams building on someone else's platform | `appslo:` |
@@ -28,6 +28,20 @@ and `terraform/`-adjacent rule files from `tools/generate_visibility_rules.py`.
 Hand-editing generated output is silently reverted on the next run. After
 changing a generator, regenerate and check for gridPos overlaps.
 
+**`tools/add_poll_outcome_panels.py` runs AFTER `generate_golden_signals.py`,
+and the order is load-bearing.** The generator rewrites the golden-signals JSON
+from scratch, so re-running it silently drops row P. Always:
+
+```bash
+python3 tools/generate_golden_signals.py demo/grafana/dashboards/slo/temporal-golden-signals.json
+python3 tools/add_poll_outcome_panels.py
+```
+
+The post-processor is idempotent (marker-based, `_pollOutcomeOwned`) and exits
+rather than overwrite on a panel-ID collision. It is demo-only on purpose —
+`generate_golden_signals.py` writes both `demo/` and `production/`, and these
+panels have no business on a production board.
+
 **Verify against the running stack, not the docs.** This repo exists partly
 because published guidance has been wrong in ways that produce *silent* failures.
 Everything below was found by running it.
@@ -38,7 +52,7 @@ A rule that parses can still return empty. Query live data before believing it.
 ## Validation
 
 ```bash
-cd demo && make validate            # 33 checks: containers, targets, rules, panels, SLOs, logs
+cd demo && make validate            # 37 checks: containers, targets, rules, panels, SLOs, logs, trace links
 cd demo && make verify-sdk-labels   # confirms alerts match YOUR SDK's labels and units
 cd monitor && go test ./...
 cd terraform && terraform fmt -check -recursive
@@ -70,7 +84,39 @@ and never fires, or a number that looks like data and is not.
 - **Idle queues make ratio alerts fire.** Sync-match and poll-success rules need a
   traffic floor.
 
+- **Two queries in one panel sharing a `refId` is not an error.** Grafana renders
+  one and silently drops the rest, so the panel looks half-populated with no
+  message anywhere. Shipped once; `validate.sh` now checks every dashboard.
+- **`poll_timeouts` is NOT an async-match counter.** Temporal exposes no
+  async-match metric — async match is `poll_success - poll_success_sync`.
+  Reading `poll_timeouts` as async match inverts the conclusion: an
+  over-provisioned fleet reads as a starved one.
+- **Poll success rate cannot page anyone alone.** A starved fleet and a flooded
+  fleet both push it down and need *opposite* responses. It needs a second,
+  independent condition (schedule-to-start). Reproduce with
+  `make chaos-poller-flood`.
+- **Scope poll ratios to your own Task Queue.** Temporal's `temporal_sys_*`
+  queues long-poll constantly and match nothing — measured, `poll_timeouts`
+  spans 68 series across 6 namespaces while `poll_success` spans 26 across 2.
+  Unscoped, the ratio sits low permanently and barely moves during a real event.
+
+**Grafana and tooling**
+
+- **Anonymous Viewers cannot reach Explore.** `datasources:explore` is granted to
+  Editor and above; a Viewer opening `/explore` is *silently redirected to the
+  home page*. That kills every trace link at once. `GF_USERS_VIEWERS_CAN_EDIT`.
+- **`docker compose restart` does NOT apply compose-file changes**, and
+  `--scale N` down leaves the surplus containers in place for a later command to
+  restart. Use `up -d --force-recreate`, and `rm -sf` before re-creating.
+- **`curl | grep -q` under `set -o pipefail` reports a false failure.** grep
+  exits on first match, curl takes SIGPIPE, and the pipeline fails despite the
+  match succeeding. Capture to a variable and match against that.
+
 **PromQL**
+
+- **`count()` of an empty vector returns no data, not `0`.** A "things in breach"
+  panel then shows *No data* on a healthy system, making the all-clear and a
+  broken query identical. End with `or vector(0)`.
 
 - **Binary operators need identical label sets.** `over_budget_executions` carries
   a `bucket` label the closed gauges do not, so the SLI returned **empty** — not a

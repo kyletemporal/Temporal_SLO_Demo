@@ -71,8 +71,8 @@ grafana/               Datasource + dashboard provisioning
   dashboards/custom/     The minimal self-hosted overview dashboard
   dashboards/slo/        SLO board: error budgets and burn rates
   dashboards/community/  Populated by `make dashboards` (see below)
-k6/                    Load/chaos scenarios (k6-driven; two more are Makefile-driven)
-scripts/               Community dashboard importer, worker blackout chaos
+k6/                    Load/chaos scenarios (k6-driven; scenarios 5-7 are Makefile-driven)
+scripts/               Dashboard importer, blackout + poller-flood chaos, Nexus/namespace CLI
 docs/CHAOS-RUNBOOK.md  What each scenario proves and how to read it
 ```
 

@@ -48,8 +48,16 @@ to paper over Workflows that were never given deadlines.
 ## 2. Blocking finding: `TemporalReportedProblems` availability
 
 The definitive stuck query depends on a search attribute that is **not
-universally available**. Verified against the demo cluster (Server 1.26.2):
-`temporal operator search-attribute list` does not include it.
+universally available**. Verified against the demo cluster **as it stood at the
+time, Server 1.26.2**: `temporal operator search-attribute list` does not
+include it.
+
+> The demo has since moved to **1.27.4** and this finding has **not been
+> re-verified there**. It is expected to still hold — `TemporalReportedProblems`
+> needs Server 1.30+ — and the monitor reports its own answer at runtime via
+> `temporal_slo_stuck_detection_available{method="reported_problems"}` (1 = the
+> attribute works here, 0 = it does not, in which case `stuck_executions` is not
+> published at all). Trust that gauge over this paragraph.
 
 | | |
 |---|---|
@@ -286,7 +294,7 @@ zero on idle queues, so it is never used alone as evidence of no backlog.
 
 | Acceptance criterion | How |
 |---|---|
-| Non-determinism detected < 15m, pages owner | **Fallback path only** on 1.26.2 |
+| Non-determinism detected < 15m, pages owner | **Fallback path only** on any server below 1.30 |
 | 5× over budget lands in bucket, ratio drops **while running** | Long-running workflow against a short budget |
 | Terminating does not improve historical compliance | Terminate, re-read the ratio |
 | Monitor down alerts within 3 poll intervals | Kill the container |
@@ -294,9 +302,10 @@ zero on idle queues, so it is never used alone as evidence of no backlog.
 | Every latency threshold carries a unit comment | Automated grep |
 
 **The gap:** criterion 1 cannot be proven against `TemporalReportedProblems` on
-1.26.2. I can validate the fallback end to end and the SA path only by
+any server below 1.30 — which covers both the original 1.26.2 demo and the
+current 1.27.4 one. I can validate the fallback end to end and the SA path only by
 construction. If you want it genuinely proven, add a 1.30+ dev server to the
-compose file for testing — it does not need to touch the 1.26.2 demo.
+compose file for testing — it does not need to touch the 1.27.4 demo.
 
 Second gap: the demo has **one** workflow type, so multi-type staggering and
 jitter get unit tests rather than a real load test.

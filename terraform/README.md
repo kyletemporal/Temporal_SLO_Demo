@@ -13,6 +13,8 @@ Built against **provider v1.7.0** and validated with `terraform validate`.
 | `modules/namespace` | A Namespace with the irreversible settings made explicit and the expensive ones deliberate |
 | `modules/team-onboarding` | Namespace + workload identity + credential + human access, in one apply |
 | `modules/observability` | A least-privilege metrics scraper for the **current** OpenMetrics endpoint |
+| `modules/self-serve-observability` | A team's own Grafana folder, dashboard, alerts and paging from ~20 lines of tfvars |
+| `modules/namespace-selfhosted` | **Self-hosted** Namespaces on demand from one map. No provider exists for these — it drives the `temporal operator` CLI. See [`docs/NAMESPACE-BEST-PRACTICES.md`](docs/NAMESPACE-BEST-PRACTICES.md) |
 | `examples/01-namespace` | Single Namespace with search attributes |
 | `examples/02-team-onboarding` | Onboarding a team end to end |
 | `examples/03-observability` | Metrics access, and a ready-to-paste Prometheus scrape job |
