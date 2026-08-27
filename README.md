@@ -35,6 +35,11 @@ internals at all. Use `production/` or `cloud/`, not both.
 encrypts nothing and publishes fourteen ports — appropriate for one laptop and
 one demo, and dangerous anywhere else.
 
+**[RECOMMENDATIONS.md](RECOMMENDATIONS.md)** explains every threshold in the
+repo and, more usefully, which of four kinds it is — published guidance,
+measured here, structural (do not tune it away), or a placeholder you must
+replace. Read it before adopting any alert.
+
 **[SECURITY.md](SECURITY.md)** carries the full risk register, the reasoning
 behind each accepted risk, a hardening checklist to work through before any of
 this touches an environment, and reproducible commands for every scan behind it.
