@@ -7,8 +7,8 @@ Status as of 2026-08-24.
 **Demo stack** — runs on `temporalio/auto-setup` 1.27.4 (customer's version), every
 image tag parameterised. `make validate` passes **37/37, 0 warnings**.
 
-**Chaos scenarios (7)** — backlog, failures, orphan queue, slot saturation, worker
-blackout, **stuck workflows**, **non-determinism**. The last two were the gaps:
+**Chaos scenarios (8)** — backlog, failures, orphan queue, slot saturation, worker
+blackout, **stuck workflows**, **non-determinism**, **poller flood**. The last two were the gaps:
 `chaos-stuck` is the only scenario where the dashboards stay green *and that is
 the finding*; `chaos-nde` proves the NDE alert fires end to end.
 
@@ -64,6 +64,14 @@ dashboard for self-hosted. Mapping in `docs/CLOUD-TO-SELFHOSTED.md`.
 
 **`aws/k8s/karpenter/`** and **`aws/k8s/worker/hpa.yaml`** — node provisioning
 against the Karpenter **v1** API, and a plain-HPA alternative to KEDA.
+
+**Scenario 8 — poller flood.** The first chaos scenario that runs the fleet in
+the OPPOSITE direction; 0-7 are all starvation shapes. Over-provision and poll
+success rate collapses (0.9995 -> 0.6812) while sync match *improves* to 1.0000
+and schedule-to-start falls to 0.0088s. `TemporalPollSuccessRateLow` is renamed
+to `TemporalMatchingStarved` with schedule-to-start as a required second
+condition — the old rule fired on a healthy cluster. Row P added to the
+golden-signals board via `tools/add_poll_outcome_panels.py`.
 
 `make validate` passes **37/37, 0 warnings**, stable across repeated runs.
 
