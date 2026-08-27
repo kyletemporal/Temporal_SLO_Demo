@@ -76,6 +76,77 @@ groups:
           summary: "Temporal is failing to reach its persistence store"
           description: "Sustained persistence errors degrade every service role. Check datastore health, connection pool sizing, and network path."
 
+  # ---------------------------------------------------------------------------
+  # POLL OUTCOMES — one definition, shared by the panels in row P and by every
+  # alert below. Hand-copying these expressions into a dashboard is how a panel
+  # and its alert quietly drift apart.
+  #
+  # TWO SCOPING DECISIONS, BOTH LOAD-BEARING.
+  #
+  # 1. taskqueue!~"temporal_sys_.*" — Temporal's own system Task Queues (one
+  #    per namespace, plus scanners and the DLQ) long-poll constantly and match
+  #    almost nothing, so they emit a large permanent stream of poll_timeouts
+  #    with no matching poll_success. Measured on this stack: poll_timeouts
+  #    spans 68 series across 6 namespaces while poll_success spans 26 across 2.
+  #    Unscoped, poll success rate is dominated by idle system queues, sits
+  #    permanently low, and barely moves when the application fleet actually
+  #    floods — the signal is buried before you start.
+  #
+  # 2. `by (namespace)` and NOT by taskqueue. These are cluster metrics and use
+  #    the label `taskqueue`; the SDK's schedule-to-start histogram uses
+  #    `task_queue` WITH AN UNDERSCORE. An `and` between them can therefore only
+  #    join on namespace — joining on the queue label matches nothing and the
+  #    alert is silently dead. Verified against the live series.
+  - name: temporal-poll-outcomes
+    rules:
+      - record: temporal:poll_matched:rate5m
+        expr: sum by (namespace) (rate(poll_success{taskqueue!~"temporal_sys_.*"}[5m]))
+
+      - record: temporal:poll_sync:rate5m
+        expr: sum by (namespace) (rate(poll_success_sync{taskqueue!~"temporal_sys_.*"}[5m]))
+
+      - record: temporal:poll_empty:rate5m
+        expr: sum by (namespace) (rate(poll_timeouts{taskqueue!~"temporal_sys_.*"}[5m]))
+
+      # ASYNC MATCH IS A SUBTRACTION, NOT A COUNTER.
+      #
+      # Temporal exposes no async-match metric. Async match is
+      # poll_success - poll_success_sync: a Task that WAS delivered, but had to
+      # be persisted first because no Worker was waiting.
+      #
+      # poll_timeouts is NOT async match. It counts polls that found NOTHING.
+      # Reading it as async match inverts the conclusion completely — a flooded
+      # fleet (lots of empty polls) would read as a starved one (lots of async
+      # matches).
+      #
+      # clamp_min at 0 because the two counters can land in different scrape
+      # windows, which briefly makes the subtraction negative.
+      - record: temporal:poll_async:rate5m
+        expr: clamp_min(temporal:poll_matched:rate5m - temporal:poll_sync:rate5m, 0)
+
+      # "Did polls find work?" — a SIZING signal, not a health signal.
+      # Low means either starvation or over-provisioning. It cannot tell you
+      # which, which is why nothing alerts on it alone.
+      - record: temporal:poll_success_rate:ratio5m
+        expr: |
+          temporal:poll_matched:rate5m
+          / clamp_min(temporal:poll_matched:rate5m + temporal:poll_empty:rate5m, 0.001)
+
+      # "Was a Worker waiting?" — a HEALTH signal. Unlike poll success rate this
+      # has no benign low state, so it needs no second condition, only a volume
+      # guard for the idle case.
+      - record: temporal:sync_match_rate:ratio5m
+        expr: temporal:poll_sync:rate5m / clamp_min(temporal:poll_matched:rate5m, 0.001)
+
+      # The discriminator. SECONDS — this stack is the Go SDK. On a Core-based
+      # SDK (TypeScript, Python, .NET) the same series name carries
+      # MILLISECONDS and every threshold built on it is wrong by 1000x.
+      # `make verify-sdk-labels` checks this against your own Workers.
+      - record: temporal:activity_schedule_to_start:p99_5m
+        expr: |
+          histogram_quantile(0.99, sum by (namespace, le) (
+            rate(temporal_activity_schedule_to_start_latency_seconds_bucket[5m])))
+
   - name: temporal-task-queue-health
     rules:
       # The trailing traffic guard is not optional. On an idle Task Queue both
@@ -83,16 +154,24 @@ groups:
       # fires continuously on a cluster that simply has nothing to do. Sync
       # match rate is only meaningful when Tasks are actually being matched, so
       # the rule requires a floor of real poll traffic before it can trigger.
+      #
+      # Rewritten 2026-08-24 to use the shared recording rules above. Same
+      # thresholds, same volume guard, two behavioural changes:
+      #   - System Task Queues are now excluded (see the scoping note on the
+      #     temporal-poll-outcomes group).
+      #   - clamp_min is 0.001 rather than 1. The old floor of 1 silently
+      #     rescaled the ratio whenever matched-poll rate was below 1/s, which
+      #     understated the drop on quiet queues. The `> 1` traffic guard is
+      #     what protects the idle case, not the clamp.
+      #
+      # Unlike poll success rate, this needs NO second condition. There is no
+      # healthy reason for Tasks to be persisted before delivery — only the
+      # idle case, which the volume guard covers.
       - alert: TemporalSyncMatchRateLow
         expr: |
-          (
-            sum by (namespace) (rate(poll_success_sync[5m]))
-            /
-            clamp_min(sum by (namespace) (rate(poll_success[5m])), 1)
-            < 0.95
-          )
+          (temporal:sync_match_rate:ratio5m < 0.95)
           and
-          (sum by (namespace) (rate(poll_success[5m])) > 1)
+          (temporal:poll_matched:rate5m > 1)
         for: 15m
         labels:
           severity: warning
@@ -120,28 +199,81 @@ groups:
       # and IDLE hosts means too many Workers, not too few — the one signal here
       # whose remedy is to REMOVE capacity.
       #
-      # Same traffic guard as sync match: on an idle queue every poll times out
-      # by design, the ratio collapses, and an unguarded rule fires forever on a
-      # cluster that simply has nothing to do.
-      - alert: TemporalPollSuccessRateLow
+      # ---------------------------------------------------------------------
+      # RENAMED FROM TemporalPollSuccessRateLow, 2026-08-24, and the rename is
+      # the point rather than tidying.
+      #
+      # The old rule alerted on poll success rate ALONE, and its own description
+      # told you to "cross-check schedule-to-start latency and Worker host CPU
+      # BEFORE adding capacity" — it documented the discriminator it did not
+      # encode. Scenario 8 (`make chaos-poller-flood`) is what made that
+      # concrete: over-provision the fleet under healthy load and poll success
+      # rate collapses through 90% while sync match sits at ~100%,
+      # schedule-to-start sits at ~0, slots stay free and every Workflow
+      # succeeds. The old rule fired on a perfectly healthy cluster.
+      #
+      # That is not a tuning problem. A starved fleet and a flooded fleet BOTH
+      # push this ratio down and they need OPPOSITE responses, so the ratio
+      # alone cannot page anyone. The second condition is what makes it
+      # actionable: schedule-to-start is high ONLY in the starvation case.
+      #
+      # Deliberately not two alerts. Keeping the old one alongside this would
+      # double-notify on every real starvation event and still fire on every
+      # flood. The over-provisioned case is covered by
+      # TemporalWorkerFleetOverProvisioned below, at severity info.
+      #
+      # ACCEPTANCE TEST: this rule must stay silent for the entire duration of
+      # `make chaos-poller-flood`.
+      # ---------------------------------------------------------------------
+      #
+      # The traffic guard is still required: on an idle queue every poll times
+      # out by design, the ratio collapses, and an unguarded rule fires forever
+      # on a cluster that simply has nothing to do.
+      - alert: TemporalMatchingStarved
         expr: |
-          (
-            sum by (namespace) (rate(poll_success[5m]))
-            /
-            clamp_min(
-              sum by (namespace) (rate(poll_success[5m]))
-              + sum by (namespace) (rate(poll_timeouts[5m])), 1)
-            < 0.90
-          )
+          (temporal:poll_success_rate:ratio5m < 0.90)
           and
-          (sum by (namespace) (rate(poll_success[5m])) > 1)
+          (temporal:activity_schedule_to_start:p99_5m > 0.2)
+          and
+          (temporal:poll_matched:rate5m > 1)
         for: 15m
         labels:
           severity: warning
           component: temporal-matching
         annotations:
-          summary: "Poll success rate below 90% in {{ $labels.namespace }}"
-          description: "Polls are returning empty. Cross-check schedule-to-start latency and Worker host CPU BEFORE adding capacity: if both are low, the fleet is oversized and the fix is fewer Workers, or Worker/poller autoscaling."
+          summary: "Matching starved in {{ $labels.namespace }} — polls empty AND tasks waiting"
+          description: "Poll success rate is below 90% AND schedule-to-start P99 is above 200ms. Both together mean Tasks are genuinely waiting for capacity. Check Worker host CPU next: HIGH means add Workers, LOW means raise MaxConcurrentActivityExecutionSize. Poll success rate on its own would also be low on an OVER-provisioned fleet, where the fix is the opposite — that case is TemporalWorkerFleetOverProvisioned."
+
+      # The other half of the same signal, and deliberately severity: info.
+      #
+      # THIS IS A COST FINDING, NOT AN INCIDENT. Nothing is failing: Workflows
+      # succeed, Tasks are picked up instantly, and the only symptom is that
+      # you are paying for pollers that spend their lives waiting out a 60s
+      # long-poll and returning empty.
+      #
+      # Routing this to a pager is exactly how teams learn to scale UP when they
+      # should scale DOWN — someone gets woken by "poll success rate low", adds
+      # Workers, and makes it worse. Send it to a dashboard, a weekly review or
+      # a cost channel.
+      #
+      # for: 30m because fleet sizing is not an urgent question and a shorter
+      # window catches every ordinary traffic trough.
+      - alert: TemporalWorkerFleetOverProvisioned
+        expr: |
+          (temporal:poll_success_rate:ratio5m < 0.90)
+          and
+          (temporal:activity_schedule_to_start:p99_5m < 0.05)
+          and
+          (temporal:sync_match_rate:ratio5m > 0.95)
+          and
+          (temporal:poll_matched:rate5m > 1)
+        for: 30m
+        labels:
+          severity: info
+          component: temporal-matching
+        annotations:
+          summary: "Worker fleet looks over-provisioned in {{ $labels.namespace }} (cost, not an incident)"
+          description: "Poll success rate is low, but schedule-to-start is near zero and sync match is healthy — so Tasks are being picked up instantly and nothing is waiting. The pollers are simply idle: most long-polls wait the full 60s and return empty. Reduce the fleet, or enable Worker/poller autoscaling. Reproduce with `make chaos-poller-flood`. Do NOT raise this above info: it is the signal most likely to be misread as 'add capacity'."
 
   - name: temporal-worker-fleet
     rules:

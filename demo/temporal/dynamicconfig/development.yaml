@@ -1,0 +1,67 @@
+# Dynamic configuration for the demo cluster.
+#
+# Mounted over /etc/temporal/config/dynamicconfig/docker.yaml, which auto-setup
+# ships as an EMPTY file. The server polls it every 60s (pollInterval in
+# docker.yaml), so edits here take effect without a restart — but note that a
+# 60s poll means "I changed it and nothing happened" is usually just impatience.
+#
+# ---------------------------------------------------------------------------
+# NEXUS
+# ---------------------------------------------------------------------------
+# Nexus lets a Workflow in one Namespace call a service exposed by another
+# Namespace through a named Endpoint, without the caller knowing where the
+# handler runs or sharing a Namespace with it.
+#
+# WHAT IS ALREADY DONE FOR YOU ON 1.27.4, and what is not:
+#
+#   - The Nexus APIs are ON by default. `temporal operator nexus endpoint list`
+#     answers on a stock auto-setup container, so there is no `system.enableNexus`
+#     to set. Registering and listing Endpoints works with none of this file.
+#
+#   - The frontend HTTP port is ALREADY 7243. auto-setup's config template
+#     renders `httpPort: 7243` and `httpAddress: 127.0.0.1:7243` with no
+#     environment variable set (FRONTEND_HTTP_PORT overrides it).
+#
+#   - What is NOT done is the CALLBACK path below. Registering an Endpoint
+#     succeeds without it; INVOKING a Nexus Operation from Workflow code then
+#     fails, because the server has nowhere to tell the handler to call back to.
+#     That split is worth knowing: the failure appears at the first real
+#     invocation, long after the setup looked like it worked.
+#
+# These are the pre-1.30 keys. On 1.30.X and later both are replaced by a single
+# `component.nexusoperations.useSystemCallbackURL: true`, and the server derives
+# the URL itself. Check your server version before copying this file.
+
+component.nexusoperations.callback.endpoint.template:
+  # Where a Nexus handler posts its result when the Operation completes.
+  #
+  # A Go template. The server interpolates .NamespaceName and .NamespaceID —
+  # they are NOT shell or Compose variables, so leave the braces alone.
+  #
+  # http, not https, because this cluster terminates no TLS. That is what makes
+  # AllowInsecure below necessary, and both are development-only settings.
+  #
+  # The host is `temporal`, the Compose service name, which resolves on the
+  # tobs network. For CROSS-NAMESPACE calls inside one cluster the host is
+  # irrelevant — the server resolves the target through membership rather than
+  # by dialling this URL — so this value only starts to matter when a handler
+  # outside the cluster has to reach back in. At that point it must be a URL
+  # that is reachable FROM THE HANDLER, which is rarely a Compose service name.
+  - value: http://temporal:7243/namespaces/{{.NamespaceName}}/nexus/callback
+
+component.callbacks.allowedAddresses:
+  # An allow-list of callback URLs the server will accept.
+  #
+  # SECURITY: this is the most permissive setting available, and it is
+  # deliberate for a laptop lab. `Pattern: "*"` accepts a callback to ANY host,
+  # and `AllowInsecure: true` accepts plaintext HTTP. Together they let anyone
+  # who can register an Endpoint direct completions to a host of their choosing,
+  # in cleartext — a data-exfiltration path and an SSRF primitive.
+  #
+  # Temporal's own documentation restricts these to development for that reason.
+  # For anything real: narrow Pattern to your own domain ("*.example.com") and
+  # set AllowInsecure to false once TLS terminates in front of the frontend.
+  # Recorded as finding D11 in SECURITY.md.
+  - value:
+      - Pattern: "*"
+        AllowInsecure: true

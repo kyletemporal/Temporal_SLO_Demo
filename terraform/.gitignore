@@ -5,4 +5,11 @@
 .terraform.lock.hcl
 *.tfvars
 !*.tfvars.example
+# The environment-promotion pattern IS the two tfvars files — the whole point is
+# that dev and prod differ in data rather than in a forked configuration, which
+# you cannot see if the data is ignored. Both hold environment names, regions,
+# search attributes and tags. No credentials, and none should ever be added:
+# put secrets in TF_VAR_* or a secret manager, not here.
+!patterns/01-environment-promotion/envs/dev.tfvars
+!patterns/01-environment-promotion/envs/prod.tfvars
 crash.log

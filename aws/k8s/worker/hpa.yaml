@@ -1,0 +1,186 @@
+# Autoscaling a Temporal Worker fleet with a PLAIN HPA.
+#
+# This is the ALTERNATIVE to scaledobject.yaml. Apply one or the other, never
+# both — two controllers owning the same Deployment's replica count fight, and
+# the fleet oscillates.
+#
+# ---------------------------------------------------------------------------
+# WHICH ONE TO USE
+#
+# Use KEDA (scaledobject.yaml) unless you cannot. It reads Prometheus directly,
+# so it is one CRD and no extra control-plane component.
+#
+# Use this plain HPA when:
+#   - You are not allowed to install KEDA (a common platform-team constraint).
+#   - You already run the Prometheus Adapter for other workloads.
+#   - You want the autoscaler to be a core Kubernetes object with no operator
+#     in the failure path.
+#
+# THE COST is the whole reason KEDA exists: an HPA cannot query Prometheus. It
+# only understands the Metrics API, so you must run the PROMETHEUS ADAPTER as a
+# custom.metrics.k8s.io / external.metrics.k8s.io APIService and teach it the
+# query. That is two objects and an APIService registration below, and it is a
+# real piece of control-plane surface — when the adapter is down the HPA does
+# not fail loudly, it reports <unknown> and stops scaling.
+#
+# ---------------------------------------------------------------------------
+# WHAT DOES NOT CHANGE: DO NOT SCALE ON CPU.
+#
+# A Worker spends most of its life blocked in a long poll, which costs almost
+# no CPU. When the queue backs up and the fleet is falling behind, CPU stays
+# flat or DROPS — so a CPU-based HPA scales DOWN the fleet that is already
+# behind. It is not a weak signal, it is an inverted one. Scale on
+# SCHEDULE-TO-START LATENCY, exactly as the KEDA version does.
+---
+# The Prometheus Adapter rule that turns the PromQL into an external metric.
+# Goes in the adapter's own Helm values or ConfigMap, shown here so the whole
+# mechanism is in one file.
+#
+# `external` rules, not `custom`: schedule-to-start is a property of the TASK
+# QUEUE, not of a Kubernetes object, so there is nothing to associate it with.
+# Modelling it as a custom (object) metric forces a fake association with the
+# Deployment and then breaks the moment two Deployments poll one queue.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-adapter-temporal
+  namespace: monitoring
+data:
+  config.yaml: |
+    externalRules:
+      - seriesQuery: 'temporal_activity_schedule_to_start_latency_seconds_bucket{namespace!="",task_queue!=""}'
+        resources:
+          namespaced: false
+        name:
+          matches: "^temporal_activity_schedule_to_start_latency_seconds_bucket$"
+          as: "temporal_activity_schedule_to_start_p95"
+        # The adapter substitutes <<.LabelMatchers>> from the HPA's
+        # metricSelector. Without a matchLabels selector on the HPA below, this
+        # aggregates EVERY task queue into one number — and a healthy queue
+        # then masks a starved one.
+        metricsQuery: |
+          histogram_quantile(0.95, sum by (le) (rate(
+            temporal_activity_schedule_to_start_latency_seconds_bucket{<<.LabelMatchers>>}[2m]
+          )))
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: temporal-worker
+  namespace: temporal-workers
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: temporal-worker
+
+  minReplicas: 2        # never zero: an unpolled queue is an outage
+  maxReplicas: 50
+
+  metrics:
+    - type: External
+      external:
+        metric:
+          name: temporal_activity_schedule_to_start_p95
+          # Scopes the adapter query to ONE task queue. Drop this and you are
+          # scaling on the average across every queue in the namespace.
+          selector:
+            matchLabels:
+              namespace: NAMESPACE
+              task_queue: orders
+        target:
+          # AverageValue, not Value.
+          #
+          # `Value` compares the metric to the target directly and ignores
+          # replica count, so the HPA has no model of what adding a pod does —
+          # it overshoots to maxReplicas and then oscillates.
+          #
+          # `AverageValue` divides by current replicas, which is the behaviour
+          # you want: desired = ceil(replicas * current / target).
+          type: AverageValue
+          # UNITS MATTER, AND GETTING THIS WRONG IS SILENT.
+          #
+          # 200m = 0.2 SECONDS, targeting Temporal's published 200ms guidance.
+          # Quantity notation, so "200m" is milli-units of the metric's own
+          # unit — and the metric is in SECONDS on Go and Java.
+          #
+          # TypeScript, Python and .NET SDKs emit MILLISECONDS. There the
+          # metric name has no _seconds suffix and the target is "200", not
+          # "200m" — a 1000x error that makes the autoscaler either never act
+          # or never stop. Run `make verify-sdk-labels` against your workers.
+          averageValue: "200m"
+
+  behavior:
+    # Scale UP fast, DOWN slowly. The asymmetry is deliberate: scaling up late
+    # means tasks waiting, while scaling down early means killing Workers
+    # mid-Activity — and a Worker killed mid-Activity becomes an Activity
+    # timeout and a retry, which manufactures the very latency the autoscaler
+    # exists to prevent.
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 30
+      selectPolicy: Max
+    scaleDown:
+      # 10 minutes. The HPA default is 5m (300s) and it is too eager for a
+      # fleet whose pods hold long-running work.
+      stabilizationWindowSeconds: 600
+      policies:
+        - type: Percent
+          value: 10
+          periodSeconds: 60
+      selectPolicy: Min
+---
+# NOT INCLUDED, and worth saying why.
+#
+# A second metric on worker slot availability. temporal_worker_task_slots_available
+# is emitted BY THE WORKERS, so scaling on it is a feedback loop: add Workers,
+# total slots rise, the metric improves, and the autoscaler concludes it was
+# right — whether or not a single task moved faster. Scale on the QUEUE's
+# state, not the fleet's.
+#
+# Also not included: a Temporal Cloud backlog metric. temporal_cloud_v1_* series
+# do not exist on a self-hosted cluster. The KEDA manifest documents the
+# self-hosted equivalents (no_poller_tasks, sync match rate) inline.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: temporal-worker-hpa-notes
+  namespace: temporal-workers
+data:
+  README: |
+    Verify before trusting this autoscaler. In this order — each step fails
+    differently and the first three are all silent.
+
+    1. Is the adapter serving the metric at all?
+         kubectl get apiservices | grep external.metrics
+       Must be Available=True. A missing APIService is why an HPA sits at
+       <unknown> forever.
+
+    2. Does the metric resolve with YOUR labels?
+         kubectl get --raw \
+           "/apis/external.metrics.k8s.io/v1beta1/namespaces/temporal-workers/temporal_activity_schedule_to_start_p95?labelSelector=task_queue%3Dorders"
+       An empty items[] means the adapter's query returned nothing — usually a
+       namespace/task_queue label that does not match, or the seconds vs
+       milliseconds mistake above.
+
+    3. Is the HPA reading it?
+         kubectl get hpa temporal-worker -n temporal-workers
+       TARGETS must show a real number. `<unknown>` is the adapter; it is NOT
+       the HPA and no amount of editing this file fixes it.
+
+    4. Does it act?
+         kubectl get hpa temporal-worker -n temporal-workers -w
+       Drive load. Replicas should rise while schedule-to-start is high and
+       settle SLOWLY afterwards rather than snapping back.
+
+    5. Confirm the underlying query returns data before trusting any of it:
+         curl -G http://prometheus:9090/api/v1/query --data-urlencode \
+           'query=histogram_quantile(0.95, sum by (le) (rate(temporal_activity_schedule_to_start_latency_seconds_bucket{namespace="NAMESPACE",task_queue="orders"}[2m])))'
+       An empty result is the difference between an autoscaler that is idle and
+       one that is broken, and the HPA reports both as <unknown>.
+
+    DO NOT APPLY THIS ALONGSIDE scaledobject.yaml. KEDA creates its own HPA for
+    the same Deployment; two of them fight and the fleet oscillates.

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """RED + Saturation (four golden signals) dashboard with SLOs on top."""
-import json, sys
+import json, sys, urllib.parse
 
 import pathlib
 OUT = sys.argv[1] if len(sys.argv) > 1 else \
@@ -8,6 +8,53 @@ OUT = sys.argv[1] if len(sys.argv) > 1 else \
 
 DS = {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}
 DS_LOKI = {"type": "loki", "uid": "loki"}
+DS_TEMPO = {"type": "tempo", "uid": "tempo"}
+DS_PYRO = {"type": "grafana-pyroscope-datasource", "uid": "pyroscope"}
+
+# The service.name every span and profile on this stack carries. Worker only —
+# the Temporal Service itself is not instrumented for traces here.
+SVC = "temporal-worker"
+
+# Options for the slow-span threshold. See the comment on TRACE_LINKS for why
+# this is a dial and not a constant.
+TRACE_SLOW_OPTIONS = ["10ms", "25ms", "50ms", "100ms", "250ms", "500ms", "1s", "5s"]
+TRACE_SLOW_DEFAULT = "50ms"
+
+
+# =========================================================================
+# EXPLORE DEEP LINKS
+#
+# Traces were the hardest signal on this board to actually reach: the panels in
+# row N are span METRICS, and getting from "p95 is up" to a trace meant opening
+# Explore, picking Tempo, and writing TraceQL from memory. Every link below
+# lands on a filled-in query instead, because the query travels IN the URL.
+#
+# Grafana 10.2+ Explore URL format — one pane per key:
+#   /explore?schemaVersion=1&panes={"<id>":{datasource,queries,range}}
+# The pre-10.2 ?left={...} form is NOT accepted by 11.x and fails silently, so
+# this is version-sensitive. Verified against Grafana 11.5.1.
+# =========================================================================
+def explore_url(pane, ds, queries):
+    """A URL that opens Explore with `queries` already run, over the time range
+    the dashboard is currently showing."""
+    body = {pane: {"datasource": ds["uid"],
+                   "queries": [dict(q, datasource=ds, refId=q.get("refId", "A"))
+                               for q in queries],
+                   "range": {"from": "${__from}", "to": "${__to}"}}}
+    q = urllib.parse.quote(json.dumps(body, separators=(",", ":")), safe="")
+    # $__from/$__to must survive encoding INTACT. Percent-encoded, Grafana does
+    # not recognise them as variables, never substitutes them, and the link
+    # quietly drops you at the default range instead of the window you were
+    # looking at — the one failure here that looks like it worked.
+    for var in ("__from", "__to", "__field.labels.span_name", "trace_slow"):
+        q = q.replace(urllib.parse.quote("${%s}" % var, safe=""), "${%s}" % var)
+    return f"/explore?schemaVersion=1&orgId=1&panes={q}"
+
+
+def traceql(query, limit=20):
+    return [{"refId": "A", "queryType": "traceql", "query": query,
+             "limit": limit, "tableType": "traces"}]
+
 
 # Status palette — reserved for state, never reused as a series colour.
 GOOD, SERIOUS, CRITICAL = "#0ca30c", "#ec835a", "#d03b3b"
@@ -17,6 +64,53 @@ C1, C2, C3, C4, C5 = "#3987e5", "#d95926", "#199e70", "#c98500", "#d55181"
 # Sequential blue for ORDERED magnitude (quantiles), bounded per the ordinal
 # rule so no step recedes into the dark surface.
 S_LO, S_MID, S_HI = "#9ec5f4", "#5598e7", "#2a78d6"
+
+# The five ways into tracing, in the order an incident actually needs them.
+# Each answers a question the metric panels structurally cannot: metrics tell
+# you a class of work got slower, a trace tells you which execution and where.
+TRACE_LINKS = [
+    # THE THRESHOLD IS A VARIABLE, AND THAT IS NOT DECORATION.
+    #
+    # This first shipped as `duration > 1s` and was dead on arrival: measured on
+    # the demo workload, the slowest ACTIVITY span is ChargePayment at a p99 of
+    # 64ms. Nothing on this stack has an activity span near a second, so the
+    # button always returned nothing.
+    #
+    # Worse, it does not come alive under load either. An activity span covers
+    # EXECUTION only — the queue wait before a Worker picks the task up is
+    # schedule-to-start, which lives in rows D and S and never appears in this
+    # duration. So `chaos-backlog` can have the fleet minutes behind while every
+    # activity span stays a tidy 3ms.
+    #
+    # A fixed threshold is therefore wrong twice over: too high and the button
+    # is permanently empty, too low and it matches everything. "Slow" is
+    # relative to the workload, so the operator dials it.
+    ("Slow activities",
+     "Activity spans over $trace_slow — dial the threshold in the header",
+     C2, explore_url("slow", DS_TEMPO,
+         traceql('{ span.temporal.span.kind = "activity" && duration > ${trace_slow} }'))),
+
+    ("Failed spans",
+     "Errored spans. Empty on a healthy stack — `make chaos-failures` fills it",
+     CRITICAL, explore_url("errors", DS_TEMPO,
+         traceql('{ status = error }'))),
+
+    ("Service graph",
+     "Who calls whom, with rate and latency per edge — built from spans, not config",
+     C1, explore_url("map", DS_TEMPO,
+         [{"refId": "A", "queryType": "serviceMap", "serviceMapQuery": ""}])),
+
+    ("All recent traces",
+     "No filter. Start here when you do not yet know what you are looking for",
+     C3, explore_url("all", DS_TEMPO, traceql("{}", limit=50))),
+
+    ("CPU profiles",
+     "Where the Worker's CPU went, by function. Continuous — no repro needed",
+     C5, explore_url("prof", DS_PYRO,
+         [{"refId": "A", "queryType": "both",
+           "profileTypeId": "process_cpu:cpu:nanoseconds:cpu:nanoseconds",
+           "labelSelector": '{service_name="%s"}' % SVC, "groupBy": []}])),
+]
 
 NLP = 'operation!~"Poll.*|GetTaskQueueUserData|ListNexusEndpoints"'
 CF = ('error_type!~"serviceerror_(Canceled|NotFound|NamespaceNotFound'
@@ -45,7 +139,7 @@ def color_override(name, hexv):
 
 def ts(title, gp, targets, unit, desc, overrides=None, thr=None,
        decimals=None, minv=None, maxv=None, legend_mode="list",
-       legend_place="bottom", calcs=None, fill=8, scale=None):
+       legend_place="bottom", calcs=None, fill=8, scale=None, links=None):
     d = {"color": {"mode": "thresholds" if thr else "palette-classic"},
          "unit": unit,
          "custom": {
@@ -60,6 +154,8 @@ def ts(title, gp, targets, unit, desc, overrides=None, thr=None,
     if minv is not None: d["min"] = minv
     if maxv is not None: d["max"] = maxv
     if scale: d["custom"]["scaleDistribution"] = scale
+    # Data links: clicking a series jumps to the traces BEHIND that series.
+    if links: d["links"] = links
     return {"type": "timeseries", "title": title, "id": nid(), "datasource": DS,
             "gridPos": gp, "targets": targets, "description": desc,
             "fieldConfig": {"defaults": d, "overrides": overrides or []},
@@ -271,12 +367,28 @@ def logs_panel(title, gp, expr, desc):
 P.append(row("K — Worker cache  ·  watch, do not page", 42))
 
 P.append(ts("Sticky cache size vs forced evictions", {"h": 8, "w": 24, "x": 0, "y": 43},
+    # BOTH TARGETS NEED DISTINCT refIds. This panel shipped with two queries
+    # both on refId "A" — Grafana collides them and renders only one, so the
+    # panel looked half-broken with no error anywhere. It is the one multi-query
+    # panel in this file where ref= was omitted; every other one passes it.
     [tgt("sum by (namespace) (temporal_sticky_cache_size)", legend="cached {{namespace}}"),
      tgt("sum by (namespace) (rate(temporal_sticky_cache_total_forced_eviction_total[$__rate_interval]))",
-         legend="forced evictions/s {{namespace}}")],
+         legend="forced evictions/s {{namespace}}", ref="B")],
     "short",
-    "WATCH tier, not an alert.\n\nSticky cache size approaching WorkflowCacheSize drives forced evictions, and every eviction means the next Workflow Task replays the whole history instead of resuming from cache. That shows up as workflow task execution latency, not as an error — which is why it is worth plotting before it becomes a latency incident.",
-    legend_mode="table", legend_place="bottom", fill=10))
+    "WATCH tier, not an alert.\n\nSticky cache size approaching WorkflowCacheSize drives forced evictions, and every eviction means the next Workflow Task replays the whole history instead of resuming from cache. That shows up as workflow task execution latency, not as an error — which is why it is worth plotting before it becomes a latency incident.\n\nTWO SCALES, TWO AXES. Cache size is a GAUGE (a count of cached executions); evictions are a RATE (per second). On a shared axis the eviction rate is invisible whenever the cache is non-trivially sized — which is exactly when you need to see it. Evictions are on the right axis, in red.\n\nA flat non-zero cache with zero evictions is the healthy state.",
+    # Evictions to their own axis and their own unit, or the signal that matters
+    # is a flat line pinned to zero underneath the cache-size series.
+    overrides=[
+        {"matcher": {"id": "byRegexp", "options": "forced evictions.*"},
+         "properties": [{"id": "custom.axisPlacement", "value": "right"},
+                        {"id": "unit", "value": "reqps"},
+                        {"id": "custom.axisLabel", "value": "evictions/s"},
+                        {"id": "color", "value": {"mode": "fixed", "fixedColor": CRITICAL}}]},
+        {"matcher": {"id": "byRegexp", "options": "cached.*"},
+         "properties": [{"id": "custom.axisLabel", "value": "cached executions"},
+                        {"id": "color", "value": {"mode": "fixed", "fixedColor": C1}}]},
+    ],
+    legend_mode="table", legend_place="bottom", fill=10, calcs=["lastNotNull", "max"]))
 
 P.append(row("L — Logs  ·  the only place an execution ID may live", 51))
 
@@ -364,31 +476,87 @@ P.append(stat("Server-reported stuck detection", {"h": 6, "w": 2, "x": 22, "y": 
 # =========================================================================
 P.append(row("N — Traces & profiles  ·  where the time actually went", 69))
 
-P.append(ts("Span latency p95 by operation (from traces)", {"h": 7, "w": 12, "x": 0, "y": 70},
+# ---- The jump-off panel -------------------------------------------------
+# Buttons, not a paragraph telling you which query to type. Colour is the
+# accent only (left rule + rule under the label); the label and body inherit
+# the theme's own text colour, so this reads correctly on light and dark
+# without hardcoding either.
+def trace_buttons(gp):
+    cards = "".join(f"""
+    <a href="{url}" target="_blank" rel="noopener" style="
+        flex:1 1 0;min-width:150px;text-decoration:none;color:inherit;
+        display:block;padding:10px 12px;border-radius:3px;
+        border:1px solid rgba(127,127,127,.28);border-left:3px solid {colour};
+        background:rgba(127,127,127,.08);transition:background .15s;"
+       onmouseover="this.style.background='rgba(127,127,127,.18)'"
+       onmouseout="this.style.background='rgba(127,127,127,.08)'">
+      <div style="font-weight:600;font-size:13px;letter-spacing:.01em;">{title} <span style="opacity:.5;">&rarr;</span></div>
+      <div style="font-size:11px;line-height:1.35;opacity:.72;margin-top:3px;">{sub}</div>
+    </a>""" for title, sub, colour, url in TRACE_LINKS)
+    return {"type": "text", "title": "Open in Explore — the query is already written",
+            "id": nid(), "gridPos": gp, "transparent": True,
+            "description": "Each button opens Explore on a pre-filled query, over the time range this dashboard is currently showing.\n\nThe panels below are span METRICS — aggregates derived from sampled traces. They tell you a CLASS of work got slower. Only a trace tells you which execution, and where inside it the time went. These buttons are the shortest path from one to the other.\n\nTWO THINGS THAT LOOK LIKE BREAKAGE AND ARE NOT:\n\n- An activity span times EXECUTION, not the queue wait before a Worker picked the task up. That wait is schedule-to-start, in rows D and S. During `make chaos-backlog` the fleet can be minutes behind while every activity span stays a few milliseconds, so 'Slow activities' correctly stays empty.\n\n- 'Failed spans' is empty whenever nothing has failed. `make chaos-failures` populates it.\n\nIf EVERY button lands on the Grafana home page instead of Explore, the viewer lacks the datasources:explore permission — see GF_USERS_VIEWERS_CAN_EDIT in docker-compose.yml.",
+            "options": {"mode": "html", "code": {"language": "plaintext", "showLineNumbers": False,
+                                                 "showMiniMap": False},
+                        "content": f'<div style="display:flex;gap:8px;flex-wrap:wrap;">{cards}\n</div>'}}
+
+P.append(trace_buttons({"h": 4, "w": 24, "x": 0, "y": 70}))
+
+# Per-series data links. The legend of these two panels IS a list of span
+# names, so clicking one should ask Tempo for that span — not drop you in an
+# empty search box to retype a name you were already looking at.
+SPAN_LINK = [{"title": "Traces for this span", "targetBlank": True,
+              "url": explore_url("span", DS_TEMPO,
+                  traceql('{ name = "${__field.labels.span_name}" }'))}]
+SLOW_SPAN_LINK = [{"title": "Slowest traces for this span", "targetBlank": True,
+                   "url": explore_url("span", DS_TEMPO,
+                       traceql('{ name = "${__field.labels.span_name}" && duration > ${trace_slow} }'))}]
+
+P.append(ts("Span latency p95 by operation (from traces)", {"h": 7, "w": 12, "x": 0, "y": 74},
     [tgt('histogram_quantile(0.95, sum by (le, span_name) (rate(traces_spanmetrics_latency_bucket[$__rate_interval])))',
          legend="{{span_name}}")],
     "s",
-    "p95 per span, derived from sampled traces by Tempo's metrics generator.\n\nESTIMATE, not an SLI — sampling makes it approximate, and the SDK histograms above are exact. Its value is the breakdown: this tells you WHICH activity is slow, which no SDK metric does.",
-    legend_mode="table", legend_place="right", fill=10))
+    "p95 per span, derived from sampled traces by Tempo's metrics generator.\n\nESTIMATE, not an SLI — sampling makes it approximate, and the SDK histograms above are exact. Its value is the breakdown: this tells you WHICH activity is slow, which no SDK metric does.\n\nClick any series to open the slow traces behind it.",
+    legend_mode="table", legend_place="right", fill=10, links=SLOW_SPAN_LINK))
 
-P.append(ts("Span throughput by operation", {"h": 7, "w": 12, "x": 12, "y": 70},
+P.append(ts("Span throughput by operation", {"h": 7, "w": 12, "x": 12, "y": 74},
     [tgt('sum by (span_name) (rate(traces_spanmetrics_calls_total[$__rate_interval]))', legend="{{span_name}}")],
     "reqps",
-    "Calls per second per span. Useful for spotting an Activity being retried far more often than its siblings — a retry storm shows here as throughput without matching Workflow completions.\n\nTo find the executions themselves, use TraceQL:\n  { span.temporal.span.kind = \"activity\" && duration > 1s }",
-    legend_mode="table", legend_place="right", fill=10))
+    "Calls per second per span. Useful for spotting an Activity being retried far more often than its siblings — a retry storm shows here as throughput without matching Workflow completions.\n\nClick any series to open that span's traces.",
+    legend_mode="table", legend_place="right", fill=10, links=SPAN_LINK))
 
 dash = {
     "__inputs": [{"name": "DS_PROMETHEUS", "label": "Prometheus", "description": "",
                   "type": "datasource", "pluginId": "prometheus", "pluginName": "Prometheus"}],
     "annotations": {"list": []},
     "description": "Four golden signals (RED + Saturation) for a self-hosted Temporal Service, with SLO attainment and error budget burn on top.",
-    "editable": True, "graphTooltip": 1, "links": [], "panels": P, "preload": False,
+    "editable": True, "graphTooltip": 1,
+    # Header links, so tracing is one click from ANY row — row N is at the
+    # bottom of a nine-row board, and "scroll to the end first" is how a signal
+    # ends up unused during the incident it was built for.
+    "links": [{"asDropdown": False, "icon": "external link", "includeVars": False,
+               "keepTime": False, "tags": [], "targetBlank": True,
+               "title": title, "tooltip": sub, "type": "link", "url": url}
+              for title, sub, _c, url in TRACE_LINKS],
+    "panels": P, "preload": False,
     "refresh": "30s", "schemaVersion": 39,
     "tags": ["temporal", "golden-signals", "red", "sre", "slo"],
-    "templating": {"list": [{"current": {}, "hide": 0, "includeAll": False,
-                             "label": "Data source", "multi": False, "name": "DS_PROMETHEUS",
-                             "options": [], "query": "prometheus", "refresh": 1,
-                             "regex": "", "skipUrlSync": False, "type": "datasource"}]},
+    "templating": {"list": [
+        {"current": {}, "hide": 0, "includeAll": False,
+         "label": "Data source", "multi": False, "name": "DS_PROMETHEUS",
+         "options": [], "query": "prometheus", "refresh": 1,
+         "regex": "", "skipUrlSync": False, "type": "datasource"},
+        # Feeds the trace buttons only — no panel query reads it, so changing it
+        # re-aims the links without re-running the board. Default 50ms is set
+        # from the measured workload: ChargePayment p99 is 64ms and every other
+        # activity is under 13ms, so 50ms selects the real tail and nothing else.
+        {"current": {"selected": True, "text": TRACE_SLOW_DEFAULT, "value": TRACE_SLOW_DEFAULT},
+         "hide": 0, "includeAll": False, "label": "Slow span >", "multi": False,
+         "name": "trace_slow",
+         "options": [{"selected": o == TRACE_SLOW_DEFAULT, "text": o, "value": o}
+                     for o in TRACE_SLOW_OPTIONS],
+         "query": ",".join(TRACE_SLOW_OPTIONS), "skipUrlSync": False, "type": "custom"},
+    ]},
     "time": {"from": "now-1h", "to": "now"}, "timepicker": {}, "timezone": "browser",
     "title": "Temporal — Golden Signals (RED + Saturation)",
     "uid": ("temporal-golden-signals" if "demo/" in OUT else "temporal-golden-signals-prod"),  # PROD_UID: demo and production must not collide in one Grafana

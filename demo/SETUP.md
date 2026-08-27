@@ -3,7 +3,7 @@
 Getting the Temporal self-hosted observability demo running on your machine.
 
 Everything here was executed end to end on a clean machine on 2026-08-10 against
-Temporal Server 1.26.2, Go SDK 1.47.0, Grafana 11.5.1, Prometheus 3.1.0, and k6
+Temporal Server 1.27.4, Go SDK 1.47.0, Grafana 11.5.1, Prometheus 3.1.0, and k6
 0.55.0. The commands below are the ones that were actually run, in order.
 
 If you only read one section, read **[Step 3: Verify](#step-3-verify-do-not-skip-this)**.
@@ -262,6 +262,16 @@ error budget actually drain. Verified: a 4-minute `make chaos-slots` run took
 | `make chaos-orphan` | Task Queue name mismatch — the one signal with no false-positive mode |
 | `make chaos-slots` | Concurrency set too low (looks identical to backlog; the fix is opposite) |
 | `make chaos-blackout` | Absent Workers emit **no** metrics — panels go blank, not red |
+| `make chaos-stuck` | Some failures move **no** metric at all (cleanup: `make chaos-stuck-release`) |
+| `make chaos-nde` | Non-determinism — the failure Temporal cannot retry past (cleanup: `make chaos-nde-stop`) |
+| `make chaos-poller-flood` | Too MANY Workers: poll success rate collapses while nothing is wrong (cleanup: **required**, `make chaos-poller-flood-reset`) |
+
+**`chaos-poller-flood` is the odd one out**: the chaos is the FLEET, not the
+load. It scales to 20 Workers against 0.2 orders/sec — roughly 400 pollers per
+offered order/sec. A smaller ratio does not reproduce at all: measured, 8
+Workers against 2 orders/sec leaves poll success rate at 0.94. Its cleanup is
+not optional — 20 Workers left running will absorb the backlog in
+`chaos-backlog` and `chaos-slots` and make them look like they failed.
 
 Every scenario except `chaos-blackout` accepts a shorter run:
 

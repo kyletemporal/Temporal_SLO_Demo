@@ -1,0 +1,282 @@
+# Karpenter node provisioning for a Temporal Worker fleet.
+#
+# API VERSION: karpenter.sh/v1 and karpenter.k8s.aws/v1. Karpenter went v1 in
+# August 2024 and the v1beta1 manifests you will find in older blog posts do
+# not apply. Two things moved that break a copied v1beta1 file:
+#   - `kubelet` config moved from NodePool to EC2NodeClass.
+#   - `amiSelectorTerms` became REQUIRED. v1beta1 defaulted the AMI; v1 refuses
+#     to guess, because a silent AMI bump is a silent node-image change.
+#
+# ---------------------------------------------------------------------------
+# THE CENTRAL POINT, and it is the same inversion as the autoscaler one layer up
+#
+# scaledobject.yaml exists because a Worker blocked in a long poll burns almost
+# no CPU, so CPU-based scaling shrinks a fleet that is falling behind.
+#
+# KARPENTER HAS THE SAME BLIND SPOT AT THE NODE LAYER. Consolidation looks for
+# UNDERUTILIZED nodes and removes them. A Worker holding a 20-minute Activity
+# and waiting on a slow downstream API is, by every resource measure Karpenter
+# can see, idle. It is the single most expensive pod on the cluster to kill and
+# it looks like the cheapest.
+#
+# Killing it turns into an Activity timeout and a retry — so aggressive
+# consolidation manufactures exactly the backlog the autoscaler exists to
+# prevent, and it does it during the quiet periods when consolidation is most
+# eager. The settings below are all about that one problem.
+---
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: temporal-workers
+spec:
+  # Higher weight than a general-purpose NodePool, so Worker pods land here
+  # rather than on shared nodes where another team's consolidation policy
+  # decides when your Activities get killed.
+  weight: 50
+
+  template:
+    metadata:
+      labels:
+        workload: temporal-worker
+
+    spec:
+      nodeClassRef:
+        group: karpenter.k8s.aws
+        kind: EC2NodeClass
+        name: temporal-workers
+
+      # Dedicated nodes. The taint is what stops general workloads landing here
+      # and dragging the node's disruption behaviour around; the Worker
+      # Deployment needs a matching toleration.
+      taints:
+        - key: workload
+          value: temporal-worker
+          effect: NoSchedule
+
+      requirements:
+        - key: kubernetes.io/arch
+          operator: In
+          values: ["arm64"]          # Graviton. Go Workers are portable and it is cheaper.
+        - key: kubernetes.io/os
+          operator: In
+          values: ["linux"]
+        - key: karpenter.k8s.aws/instance-category
+          operator: In
+          values: ["c", "m", "r"]
+        - key: karpenter.k8s.aws/instance-generation
+          operator: Gt
+          values: ["5"]
+
+        # ON-DEMAND, DELIBERATELY, and this is the decision to argue about.
+        #
+        # Spot looks ideal for Workers — Temporal retries, so an interrupted
+        # Activity is not lost. That reasoning is correct and still usually
+        # wrong here, because the retry is not free:
+        #
+        #   - The Activity's StartToCloseTimeout must expire before the retry
+        #     starts. A 2-minute timeout means a 2-minute stall per interrupted
+        #     Activity, invisible as an error and visible only as latency.
+        #   - Spot gives 2 minutes of notice. An Activity longer than that is
+        #     killed mid-flight regardless of your grace period.
+        #   - Interruptions cluster. A capacity event takes many nodes at once,
+        #     which is a fleet-wide backlog, not a blip.
+        #
+        # Spot is a good fit when your Activities are SHORT (well under 2
+        # minutes), idempotent, and you have set heartbeats so a retry resumes
+        # rather than restarts. Add "spot" to this list then, and set
+        # `interruptionQueue` on the EC2NodeClass so Karpenter drains on notice.
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: ["on-demand"]
+
+      # Node lifetime. Rotates nodes for patching without anyone scheduling it.
+      # `Never` disables it, which is how nodes end up 400 days old.
+      expireAfter: 720h
+
+      # THE MOST IMPORTANT FIELD IN THIS FILE.
+      #
+      # The ceiling on how long Karpenter will wait for a node to drain before
+      # forcibly deleting it — INCLUDING pods carrying karpenter.sh/do-not-disrupt.
+      # It is what stops a stuck Worker blocking node rotation forever.
+      #
+      # Set it ABOVE your longest Activity StartToCloseTimeout. Below it, node
+      # rotation becomes a source of Activity timeouts that looks like random
+      # application flakiness. 1 hour assumes your longest Activity is under
+      # that; if you run multi-hour Activities, raise BOTH this and the
+      # Deployment's terminationGracePeriodSeconds.
+      terminationGracePeriod: 1h
+
+  disruption:
+    # WhenEmptyOrUnderutilized is Karpenter's default and the aggressive one:
+    # it removes nodes it believes are underutilized. As above, a long-polling
+    # Worker holding a long Activity reads as underutilized.
+    #
+    # WhenEmpty only removes nodes with NO workload pods at all. That is the
+    # safe choice for a Worker fleet and costs you some bin-packing efficiency.
+    #
+    # Choose by Activity length: if your Activities are seconds, use
+    # WhenEmptyOrUnderutilized and enjoy the savings. If they are minutes or
+    # longer, WhenEmpty until you have measured how often consolidation is
+    # cutting Activities short. `temporal_activity_execution_failed_total`
+    # rising after a scale-down is the tell.
+    consolidationPolicy: WhenEmpty
+
+    # How long a node must sit empty before removal. Not zero: Workers restart,
+    # deploys roll, and a node that briefly has no pods during a rollout should
+    # not be destroyed and immediately re-provisioned.
+    consolidateAfter: 5m
+
+    budgets:
+      # Never disrupt more than a fifth of the fleet at once, no matter what
+      # else is true. Without a budget, a drift event (an AMI update, an
+      # expireAfter wave) can cycle every node nearly simultaneously and take
+      # the task queue unpolled — which looks exactly like an application
+      # outage from the Workflow's point of view.
+      - nodes: "20%"
+
+      # Nothing voluntary during business hours. `nodes: "0"` blocks all
+      # disruption for the window. Adjust or delete to match your traffic
+      # shape — the point is that consolidation should not be discovering your
+      # Activity timeouts during peak.
+      - nodes: "0"
+        schedule: "0 9 * * mon-fri"
+        duration: 8h
+        # Applies only to these reasons; leave unset to block all of them.
+        reasons: ["Underutilized", "Drifted"]
+
+  limits:
+    cpu: "200"
+    memory: 800Gi
+---
+apiVersion: karpenter.k8s.aws/v1
+kind: EC2NodeClass
+metadata:
+  name: temporal-workers
+spec:
+  # Karpenter creates and manages the instance profile from this role.
+  # Use `instanceProfile` instead only for private clusters with no IAM
+  # endpoint access. This is the NODE role, and it is NOT the Worker's IRSA
+  # role — the Worker's AWS identity comes from its ServiceAccount annotation
+  # in worker-deployment.yaml. Conflating them gives every pod on the node the
+  # node's permissions.
+  role: KarpenterNodeRole-CLUSTER_NAME
+
+  # REQUIRED in v1. `alias` pins the AMI family and lets you choose between a
+  # moving target and a fixed one:
+  #   al2023@latest      — always current. Karpenter DRIFTS nodes when it moves,
+  #                        so your fleet rotates whenever AWS publishes an AMI.
+  #   al2023@v20240807   — pinned. Rotation happens when you change this line.
+  #
+  # Pinned is the right default for a Worker fleet: it makes node replacement a
+  # reviewed change rather than something AWS schedules for you. Combine with
+  # the disruption budgets above so the rotation you DO choose is gradual.
+  amiSelectorTerms:
+    - alias: al2023@latest
+
+  subnetSelectorTerms:
+    - tags:
+        karpenter.sh/discovery: CLUSTER_NAME
+
+  securityGroupSelectorTerms:
+    - tags:
+        karpenter.sh/discovery: CLUSTER_NAME
+
+  # kubelet lives on EC2NodeClass in v1. It was on NodePool in v1beta1, and a
+  # copied v1beta1 NodePool with a kubelet block fails schema validation.
+  kubelet:
+    # A Worker holds one goroutine per concurrent Activity, not one pod, so
+    # pod density here is low and the default maxPods is rarely the binding
+    # constraint. Left generous on purpose.
+    maxPods: 110
+    systemReserved:
+      cpu: 100m
+      memory: 256Mi
+    kubeReserved:
+      cpu: 100m
+      memory: 512Mi
+    # Evict before the node is in real trouble. A Worker OOM-killed mid-Activity
+    # is an Activity timeout plus a lost sticky cache.
+    evictionHard:
+      memory.available: 5%
+
+  blockDeviceMappings:
+    - deviceName: /dev/xvda
+      ebs:
+        volumeSize: 50Gi
+        volumeType: gp3
+        encrypted: true
+        deleteOnTermination: true
+
+  metadataOptions:
+    # IMDSv2 required, and one hop. httpPutResponseHopLimit: 1 stops a
+    # container reaching the instance metadata service and assuming the NODE
+    # role — which would bypass IRSA entirely and hand every pod the node's
+    # permissions.
+    httpEndpoint: enabled
+    httpTokens: required
+    httpPutResponseHopLimit: 1
+
+  tags:
+    workload: temporal-worker
+    ManagedBy: karpenter
+---
+# NOT SET ANYWHERE ABOVE, and worth saying why: karpenter.sh/do-not-disrupt.
+#
+# The annotation goes on the POD and takes either "true" or a Go duration:
+#
+#   metadata:
+#     annotations:
+#       karpenter.sh/do-not-disrupt: "true"     # never voluntarily disrupted
+#       karpenter.sh/do-not-disrupt: "30m"      # protected for 30 minutes
+#
+# Putting "true" on the Worker Deployment template is the obvious move and it
+# is a trap: no Worker node ever consolidates, the fleet never shrinks, and you
+# pay for peak capacity permanently. It also does not survive
+# terminationGracePeriod above — Karpenter force-deletes the pod when that
+# expires — so it buys less protection than it appears to.
+#
+# The right uses are narrower:
+#   - The DURATION form, set by the application on a pod that has just picked
+#     up a long Activity, and removed when it finishes. Protection scoped to
+#     the work actually in flight.
+#   - A PodDisruptionBudget instead, which worker-deployment.yaml already has.
+#     A blocking PDB stops voluntary disruption of the whole node, and unlike
+#     the annotation it is declarative and does not need the app to manage it.
+#
+# Start with the PDB and the settings above. Reach for the annotation only when
+# you have measured consolidation cutting Activities short.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: temporal-karpenter-notes
+  namespace: temporal-workers
+data:
+  README: |
+    Verify before trusting this NodePool:
+
+    1. kubectl get nodepool temporal-workers -o wide
+       READY=True. If it is not, `kubectl describe` names the missing
+       EC2NodeClass field — usually amiSelectorTerms, which v1 requires.
+
+    2. kubectl get ec2nodeclass temporal-workers -o wide
+       READY=True means subnets, security groups and the AMI all resolved.
+       A NodePool can be Ready while its EC2NodeClass is not.
+
+    3. Confirm discovery actually matched something:
+         kubectl get ec2nodeclass temporal-workers -o jsonpath='{.status.subnets}' | jq
+         kubectl get ec2nodeclass temporal-workers -o jsonpath='{.status.amis}' | jq
+       Empty means your karpenter.sh/discovery tags do not match. Karpenter
+       reports this in status, not by failing.
+
+    4. Watch a real provisioning decision:
+         kubectl logs -n kube-system -l app.kubernetes.io/name=karpenter -f
+       Scale the Worker Deployment past current capacity and read why it chose
+       the instance type it chose.
+
+    5. THE ONE THAT MATTERS. Drive load, let it scale up, then let it go quiet
+       and watch what consolidation does:
+         kubectl get nodeclaims -w
+       Then check whether Activities were cut short:
+         temporal_activity_execution_failed_total
+       A rise that correlates with scale-down means consolidation is killing
+       Workers mid-Activity — raise consolidateAfter, or move to WhenEmpty.

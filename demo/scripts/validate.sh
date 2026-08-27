@@ -159,6 +159,19 @@ EXPECTED_EMPTY = {k.lower(): v for k, v in {
         "failed/timeout series only exist once such an outcome occurs",
     "Server-fault rate by type":
         "no server faults have occurred — empty here is the healthy state",
+    # Full Overview (self-hosted rebuild of the Grafana Cloud board).
+    "Completions by outcome":
+        "failed/timeout/terminated counters are not created until they first increment",
+    "Errors by type — server fault only":
+        "no server faults have occurred — empty here is the healthy state",
+    "Activity failures and retries":
+        "temporal_activity_execution_failed_total does not exist until an Activity fails",
+    "SignalWorkflowExecution latency":
+        "the demo app never signals, so this operation has no series",
+    "SignalWithStartWorkflowExecution latency":
+        "the demo app never signal-with-starts, so this operation has no series",
+    "Resource exhausted":
+        "no rate limiter has fired — empty here is the healthy state",
     # Log panels. An empty log panel is NOT evidence the pipeline is broken —
     # section 6 checks that separately, which is the only reason these can be
     # allowlisted without hiding a dead collector.
@@ -220,6 +233,21 @@ for path in sorted(glob.glob("grafana/dashboards/*/*.json")):
     d = json.load(open(path))
     d = d.get("dashboard", d)
     print(f"\n  {d.get('title', path)}")
+    # COLLIDING refIds. Two queries in one panel sharing a refId is not an
+    # error in Grafana — it renders one of them and drops the other silently,
+    # so the panel looks half-populated and nothing anywhere says why. It
+    # shipped exactly once ("Sticky cache size vs forced evictions", both on
+    # "A") and was invisible to every other check here, because each query on
+    # its own returns data perfectly well.
+    for p in panels(d.get("panels", [])):
+        ids = [t.get("refId") for t in p.get("targets", [])]
+        dupes = sorted({r for r in ids if ids.count(r) > 1 and r})
+        if dupes:
+            print(f"    \033[31m FAIL\033[0m  {p.get('title','(untitled)')[:58]}  "
+                  f"{len(ids)} queries share refId {','.join(dupes)} — "
+                  f"Grafana renders one and silently drops the rest")
+            rc = 1
+
     for p in panels(d.get("panels", [])):
         for t in p.get("targets", []):
             e = t.get("expr")
@@ -255,7 +283,10 @@ hdr "6. Logs (Loki)"
 # what actually proves the pipeline works. Without it a dead Alloy looks
 # identical to a healthy quiet system: every log panel empty, every check green,
 # and the one signal that can identify a stuck execution silently gone.
-if curl -sf "$LOKI/ready" 2>/dev/null | grep -qi ready; then
+# Captured, not piped — see the note on the Explore check: pipefail + `grep -q`
+# reports a false failure when grep short-circuits and curl takes a SIGPIPE.
+loki_ready="$(curl -sf "$LOKI/ready" 2>/dev/null || true)"
+if printf '%s' "$loki_ready" | grep -qi ready; then
   ok "Loki is ready"
 
   # lq <query> [window_seconds]
@@ -322,7 +353,8 @@ except Exception: print('')" 2>/dev/null)
   fi
 
   # workflow_id as a LABEL would be a cardinality bomb. It belongs in the line.
-  if curl -sf "$LOKI/loki/api/v1/labels" 2>/dev/null | grep -qiE '"(workflow_id|workflowid|run_id|runid)"'; then
+  loki_labels="$(curl -sf "$LOKI/loki/api/v1/labels" 2>/dev/null || true)"
+  if printf '%s' "$loki_labels" | grep -qiE '"(workflow_id|workflowid|run_id|runid)"'; then
     bad "workflow_id/run_id is a LOKI LABEL — unbounded cardinality. It belongs
          in the log line only, extracted by LogQL at query time."
   else
@@ -382,6 +414,107 @@ for g in json.load(sys.stdin)['data']['groups']:
             col={'firing':'\033[31m','pending':'\033[33m'}.get(st,'\033[32m')
             print(f\"    {col}{st:8}\033[0m {r['name']}\")
 " 2>/dev/null || echo "    (unavailable)"
+
+# -----------------------------------------------------------------------------
+hdr "9. Trace deep links"
+# -----------------------------------------------------------------------------
+# The trace buttons on the golden-signals board fail in two ways that both look
+# exactly like a working link, which is why they are checked here.
+#
+# 1. PERMISSION. Grafana grants `datasources:explore` to Editor and above. An
+#    anonymous Viewer that opens /explore is not shown an error — it is silently
+#    redirected to the home page. Every trace button, every trace-to-logs link
+#    and every "view in Explore" dies at once, and the dashboards still look
+#    perfect. This check reads the permission set the browser is actually given.
+#
+# 2. THE QUERY. A TraceQL button that returns nothing is indistinguishable from
+#    a broken one. `duration > 1s` on activity spans shipped once and was dead
+#    on arrival — the slowest activity here has a p99 of 64ms.
+# Retried, because /api/health goes green BEFORE the frontend bootData carries
+# the permission set. Run straight after `docker compose restart grafana` this
+# check reported a correctly-configured stack as broken — and a security check
+# that cries wolf is one people learn to ignore.
+# NOT `curl ... | grep -q`. This script runs under `set -o pipefail`, and
+# `grep -q` exits the instant it matches — which closes the pipe, hands curl a
+# SIGPIPE, and makes the PIPELINE report failure even though the match
+# succeeded. Whether it happens depends on where in the ~60KB page the match
+# falls versus the 64KB pipe buffer, so it fails intermittently: the check
+# passed, then failed, then passed again on identical, correct configuration.
+#
+# An intermittently-red security check is worse than no check. Capture first,
+# match against the variable, no pipe.
+explore_ok=0
+for _ in 1 2 3 4 5; do
+  page="$(curl -s "$GRAF/" 2>/dev/null || true)"
+  case "$page" in *datasources:explore*) explore_ok=1; break ;; esac
+  sleep 2
+done
+if [ "$explore_ok" = 1 ]; then
+  ok "viewers can reach Explore (datasources:explore granted)"
+else
+  bad "anonymous viewers LACK datasources:explore — every trace button and
+         every trace-to-logs link silently redirects to the Grafana home page.
+         Set GF_USERS_VIEWERS_CAN_EDIT=true on the grafana service."
+fi
+
+TEMPO_URL="${TEMPO_URL:-http://localhost:3200}"
+if curl -sf "$TEMPO_URL/api/echo" >/dev/null 2>&1; then
+  link_out="$(python3 - "$ROOT" "$TEMPO_URL" <<'PY'
+import json, sys, time, urllib.parse, urllib.request, pathlib
+
+root, tempo = sys.argv[1], sys.argv[2]
+board = pathlib.Path(root) / "grafana/dashboards/slo/temporal-golden-signals.json"
+d = json.loads(board.read_text())
+
+# Resolve the same variables Grafana resolves in the browser, so this exercises
+# the URL that actually ships rather than a hand-copied version of it.
+slow = next((v.get("current", {}).get("value")
+             for v in d["templating"]["list"] if v["name"] == "trace_slow"), "50ms")
+end = int(time.time() * 1000)
+start = end - 3600 * 1000
+
+# Empty by design on a healthy stack — an error the demo has to be told to make.
+ALLOW_EMPTY = {"Failed spans": "nothing has failed; `make chaos-failures` fills it"}
+
+for l in d.get("links", []):
+    q = urllib.parse.parse_qs(urllib.parse.urlparse(l["url"]).query).get("panes", [""])[0]
+    q = (q.replace("${__from}", str(start)).replace("${__to}", str(end))
+          .replace("${trace_slow}", slow))
+    try:
+        pane = list(json.loads(q).values())[0]
+    except Exception as e:
+        print(f"FAIL:{l['title']}: URL does not parse ({e})")
+        continue
+    query = pane["queries"][0]
+    if query.get("queryType") != "traceql":
+        continue
+    u = (f"{tempo}/api/search?q=" + urllib.parse.quote(query["query"], safe="")
+         + f"&start={start//1000}&end={end//1000}&limit={query.get('limit', 20)}")
+    try:
+        n = len(json.load(urllib.request.urlopen(u, timeout=15)).get("traces") or [])
+    except Exception as e:
+        print(f"FAIL:{l['title']}: TraceQL rejected by Tempo ({e})")
+        continue
+    if n:
+        print(f"OK:{l['title']}: {n} trace(s)")
+    elif l["title"] in ALLOW_EMPTY:
+        print(f"OK:{l['title']}: empty, by design — {ALLOW_EMPTY[l['title']]}")
+    else:
+        print(f"WARN:{l['title']}: 0 traces — needs traffic, or the filter no "
+              f"longer matches this workload")
+PY
+)"
+  while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    case "$line" in
+      OK:*)   ok "trace link — ${line#OK:}" ;;
+      WARN:*) warn "trace link — ${line#WARN:}" ;;
+      *)      bad "trace link — ${line#FAIL:}" ;;
+    esac
+  done <<< "$link_out"
+else
+  warn "Tempo not reachable at $TEMPO_URL — trace buttons unverified"
+fi
 
 # -----------------------------------------------------------------------------
 printf "\n\033[1m== Summary\033[0m\n"

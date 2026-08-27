@@ -22,3 +22,22 @@ app-team/configured/
 *.tfstate.*
 *.tfplan
 crash.log
+
+# Secrets. See SECURITY.md D3 and P3.
+#
+# .env is ignored because .env.example invites creating one, and the moment
+# this stack is pointed at a real cluster that file is where the API key goes.
+# The example itself stays tracked — it holds image version pins only.
+.env
+.env.*
+!.env.example
+
+# .tfvars is where per-environment values live, which in practice is where
+# secrets land. Ignored by default and re-included only for the worked examples
+# that are meant to be read — those hold environment names, regions, search
+# attributes and tags, and no credentials.
+*.tfvars
+*.auto.tfvars
+*.tfvars.json
+!terraform/patterns/01-environment-promotion/envs/dev.tfvars
+!terraform/patterns/01-environment-promotion/envs/prod.tfvars
