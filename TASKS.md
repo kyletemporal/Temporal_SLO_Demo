@@ -116,6 +116,24 @@ routing. Rules route directly via `notification_settings.contact_point`.
    fast loop, roughly doubling Visibility query volume. Deliberate trade,
    recorded in `monitor/DESIGN.md`.
 
+## Raised upstream
+
+**`task_accepted_latency`** — filed as
+[temporalio/temporal#11916](https://github.com/temporalio/temporal/issues/11916)
+on 2026-09-03, from a question by Kevin Woo.
+
+No metric covers RPC receipt -> history task durably committed. Every segment of
+that path is instrumented and none of them start before task *generation*,
+verified against `metric_defs.go` on `main` rather than assumed. The segments
+cannot be summed — three services, three histograms, no shared exemplar.
+
+Wider on Cloud: none of the `task_latency_*` family is exposed in any of the 57
+documented `temporal_cloud_v1_*` metrics, so a Cloud customer has nothing between
+frontend RPC latency and queue depth.
+
+Full measurement and reasoning: [`docs/FR-task-accepted-latency.md`](docs/FR-task-accepted-latency.md).
+Nothing to do here until upstream responds.
+
 ## Requested: AWS integration
 
 Raised 2026-08-17. Not started — scoped here so it can be prioritised.
