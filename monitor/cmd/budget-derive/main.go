@@ -25,7 +25,7 @@ import (
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/client"
 
-	"github.com/temporal-slo-demo/monitor/internal/visibility"
+	"github.com/temporalio/temporal-slo-demo/monitor/internal/visibility"
 )
 
 // row is one workflow type's derived distribution.

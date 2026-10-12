@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Temporal Server, SDK or Cloud question
+    url: https://community.temporal.io/
+    about: This repository is observability material. Questions about Temporal itself belong in the community forum.
+  - name: Security vulnerability
+    url: https://github.com/REPLACE_ME/security/policy
+    about: Never report a vulnerability in a public issue. See SECURITY.md.

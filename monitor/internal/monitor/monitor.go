@@ -19,10 +19,10 @@ import (
 
 	"go.temporal.io/api/serviceerror"
 
-	"github.com/temporal-slo-demo/monitor/internal/config"
-	"github.com/temporal-slo-demo/monitor/internal/counter"
-	"github.com/temporal-slo-demo/monitor/internal/metrics"
-	"github.com/temporal-slo-demo/monitor/internal/visibility"
+	"github.com/temporalio/temporal-slo-demo/monitor/internal/config"
+	"github.com/temporalio/temporal-slo-demo/monitor/internal/counter"
+	"github.com/temporalio/temporal-slo-demo/monitor/internal/metrics"
+	"github.com/temporalio/temporal-slo-demo/monitor/internal/visibility"
 )
 
 type Monitor struct {

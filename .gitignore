@@ -6,6 +6,28 @@ demo/grafana/dashboards/community/*.json
 __pycache__/
 *.pyc
 
+# Compiled Go binaries.
+#
+# demo/app/temporal-obs-demo was tracked for months: a 58 MB macOS arm64
+# binary in a public repo that nothing needs, because demo/app/Dockerfile
+# builds its own from source inside the image. Every local `go build ./...`
+# rewrote it and put 25 MB of churn in the diff.
+#
+# Anchored to the exact path, not a bare name — `go build` names the output
+# after the module's last path element, so a bare `app` pattern would also
+# ignore the SOURCE directory `demo/app`.
+#
+# Both names are listed on purpose. `temporal-obs-demo` is what the old module
+# path produced; renaming the module to .../demo/app changed the output name to
+# `app`, and a stale checkout can still carry either. Missing the second one is
+# how this recurred within an hour of being fixed the first time.
+/demo/app/temporal-obs-demo
+/demo/app/app
+/monitor/monitor
+/monitor/budget-derive
+/monitor/cmd/monitor/monitor
+/monitor/cmd/budget-derive/budget-derive
+
 # OS
 .DS_Store
 app-team/configured/

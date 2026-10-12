@@ -1,4 +1,4 @@
-module github.com/example/temporal-obs-demo
+module github.com/temporalio/temporal-slo-demo/demo/app
 
 go 1.25.4
 

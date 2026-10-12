@@ -1,0 +1,200 @@
+# Static checks. Everything here runs WITHOUT the compose stack.
+#
+# The live end-to-end suite (demo/scripts/validate.sh) is deliberately not here:
+# it needs 14 containers, several minutes of generated traffic, and it asserts
+# on measured values. That belongs in a scheduled or manually-dispatched job
+# against a real environment, not on every push — a flaky required check is one
+# people learn to bypass. What IS here is everything that can fail
+# deterministically.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: Go (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [demo/app, monitor]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ matrix.module }}/go.mod
+          cache-dependency-path: ${{ matrix.module }}/go.sum
+      - name: build
+        working-directory: ${{ matrix.module }}
+        run: go build ./...
+      - name: vet
+        working-directory: ${{ matrix.module }}
+        run: go vet ./...
+      - name: test
+        working-directory: ${{ matrix.module }}
+        run: go test ./...
+      - name: gofmt
+        working-directory: ${{ matrix.module }}
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "not gofmt'd:"; echo "$unformatted"; exit 1
+          fi
+
+  govulncheck:
+    name: govulncheck (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [demo/app, monitor]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ matrix.module }}/go.mod
+      - name: govulncheck
+        working-directory: ${{ matrix.module }}
+        # Reports reachable vulnerabilities only. Standard-library findings are
+        # cleared by a toolchain bump and are frequently open upstream, so this
+        # is informational rather than blocking — see SECURITY.md P8. What it is
+        # really here to catch is the P8b case: a reachable advisory in a
+        # third-party module, which a `go get` closes today.
+        continue-on-error: true
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
+  generators:
+    name: Dashboards match their generators
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: regenerate and diff
+        # The repo rule is "edit the generator, not the JSON" (CONTRIBUTING.md).
+        # Nothing enforced it, and hand-edits to generated dashboards are
+        # silently reverted on the next run. This turns that into a failure at
+        # review time instead of a surprise later.
+        run: |
+          for g in tools/generate_*.py; do
+            echo "== $g"; python3 "$g" || exit 1
+          done
+          if ! git diff --quiet; then
+            echo
+            echo "Generated output differs from what is committed."
+            echo "Run the generators and commit the result:"
+            git diff --stat
+            exit 1
+          fi
+
+  shell:
+    name: Shell syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: bash -n every script
+        run: |
+          fail=0
+          while IFS= read -r f; do
+            bash -n "$f" || { echo "syntax error: $f"; fail=1; }
+          done < <(find . -name '*.sh' -not -path './.git/*')
+          exit $fail
+      - uses: ludeeus/action-shellcheck@master
+        continue-on-error: true
+        with:
+          severity: error
+
+  config:
+    name: YAML and JSON parse
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install pyyaml
+      - name: parse every YAML and JSON file
+        run: |
+          python3 - <<'EOF'
+          import json, pathlib, sys, yaml
+          bad = 0
+          for p in pathlib.Path('.').rglob('*'):
+              if '.git/' in str(p) or not p.is_file():
+                  continue
+              try:
+                  if p.suffix in ('.yml', '.yaml'):
+                      list(yaml.safe_load_all(p.read_text()))
+                  elif p.suffix == '.json':
+                      json.loads(p.read_text())
+                  else:
+                      continue
+              except Exception as e:
+                  print(f'FAIL {p}: {str(e)[:120]}'); bad += 1
+          print('parse failures:', bad)
+          sys.exit(1 if bad else 0)
+          EOF
+
+  promtool:
+    name: Prometheus rules
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: check every rule file
+        # -print0/xargs -0 rather than word-splitting a $(find) — the latter
+        # breaks on any path containing a space and silently passed the whole
+        # list as ONE argument when first tested.
+        run: |
+          find . \( -name '*rules*.yml' -o -name 'alerts.yml' \) \
+               -not -path './.git/*' -print0 \
+            | xargs -0 docker run --rm -i -v "$PWD:/w" -w /w \
+                --entrypoint promtool prom/prometheus:v3.1.0 check rules
+
+  hygiene:
+    name: Repository hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: no unresolved transfer placeholders
+        # These mark decisions that must be made before the repo is published
+        # under the org — support posture, disclosure routing, CODEOWNERS
+        # handles. Failing here is the point: they must not ship silently.
+        # Excludes this workflow file, which necessarily contains the marker
+        # it searches for — without that the gate fails on itself forever.
+        run: |
+          if grep -rn "REPLACE_ME(" --include='*.md' --include='*.yml' \
+               --include='CODEOWNERS' . \
+             | grep -v '.git/' \
+             | grep -v '^./.github/workflows/ci.yml:'; then
+            echo
+            echo "Unresolved transfer placeholders above. See TRANSFER.md."
+            exit 1
+          fi
+      - name: no committed binaries
+        run: |
+          fail=0
+          while IFS= read -r f; do
+            if file --mime "$f" | grep -q 'charset=binary'; then
+              echo "committed binary: $f ($(du -h "$f" | cut -f1))"; fail=1
+            fi
+          done < <(git ls-files)
+          exit $fail
+      - name: no obvious secrets or customer identifiers
+        run: |
+          if grep -rnE '(sk-ant-[A-Za-z0-9_-]{20,}|sk-proj-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY|[a-z0-9-]+\.tmprl\.cloud)' \
+               --include='*.md' --include='*.go' --include='*.yml' --include='*.yaml' \
+               --include='*.tf' --include='*.json' --include='*.sh' --include='*.py' . \
+             | grep -v '.git/'; then
+            echo
+            echo "Possible secret or real Temporal Cloud host above."
+            exit 1
+          fi

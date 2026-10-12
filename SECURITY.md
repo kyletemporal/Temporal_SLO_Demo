@@ -69,6 +69,7 @@ is out of scope by design; it is single-tenant by construction.
 | [P4](#p4) | **Medium** | `terraform/` | Terraform state stores Temporal API key tokens in plaintext | Open, documented |
 | [P5](#p5) | **Medium** | `aws/` | `external_id` (confused-deputy protection) is optional | Open, documented |
 | [P8](#p8) | **Medium** | Go | 6 reachable Go standard-library vulnerabilities | Open, upstream |
+| [P8b](#p8b) | **Medium** | Go | Reachable gRPC OOM (GO-2026-6348) on the transport every Temporal call uses | **Fixed** |
 | [D7](#d7) | Low | `demo/app`, `monitor/` | No `WriteTimeout`/`IdleTimeout` on HTTP servers | Open |
 | [D8](#d8) | Low | `demo/app` | pprof binds `0.0.0.0` inside the container | Open |
 | [D9](#d9) | Low | `demo/` | OTLP export is plaintext (`insecure: true`) | Open, by design |
@@ -420,18 +421,16 @@ bucket, KMS grants conditional. This is the one gap.
 
 ### <a id="p8"></a>P8 — Go standard-library vulnerabilities · **Medium** · upstream
 
-`govulncheck` against the toolchain the images actually build with
-(`golang:1.25-alpine` → go1.25.12):
+**Original scan (2026-08-24)**, `govulncheck` against the toolchain the images
+actually build with (`golang:1.25-alpine` → go1.25.12):
 
 | Module | Reachable | IDs |
 |---|---|---|
 | `demo/app` | **6** | GO-2026-6218, GO-2026-6091, GO-2026-6090, GO-2026-6089, GO-2026-5972, GO-2026-5026 |
 | `monitor` | **4** | GO-2026-6091, GO-2026-6090, GO-2026-6089, GO-2026-5972 |
 
-Every reachable finding is in the Go standard library, and **every one is fixed
-in go1.25.13**. Nothing is reachable in this repository's own code or in any
-third-party module (a further 1-2 per module exist in required modules but are
-not called).
+Every reachable finding was in the Go standard library, and every one is fixed
+in go1.25.13.
 
 Most relevant to what this repo does: GO-2026-6089 (`ReadHeaderTimeout` not
 applied during the unencrypted HTTP/2 check) touches the metrics and pprof
@@ -439,10 +438,58 @@ listeners directly, and GO-2026-6218 (quadratic `net/url` path resolution) is
 reachable from any HTTP handler.
 
 **Fix** — rebuild. `golang:1.25-alpine` is a floating tag, so
-`docker compose build --no-cache` picks up 1.25.13 as soon as it is published,
+`docker compose build --no-cache` picks up the fix as soon as it is published,
 with no file change. Verify with the scan command in §5. This is also the
 counter-argument to pinning that base image by digest (D10) — see the trade-off
 recorded there.
+
+**Re-scan (2026-09-28), host toolchain go1.26.5.** Same counts — `demo/app` 6,
+`monitor` 4 — all still standard library, now all fixed in **go1.26.6**. Read
+that as a moving target, not as "nothing changed": the stdlib set is whatever
+the toolchain of the day has open, and it is re-measured, not assumed.
+
+**This scan is not the image's.** It ran against the host toolchain, and the
+images build on `golang:1.25-alpine` — a different release line. The image's
+own numbers need the scan in §5, which needs Docker. Do not quote these two as
+if they were one measurement.
+
+---
+
+#### <a id="p8b"></a>P8b — gRPC OOM, reachable in a third-party module · **Medium** · **Fixed 2026-09-28**
+
+The 2026-09-28 re-scan turned up something the original did not have, and it
+breaks the original's headline claim that nothing was reachable outside the
+standard library:
+
+| ID | Module | Found | Fixed in | Reachable from |
+|---|---|---|---|---|
+| [GO-2026-6348](https://pkg.go.dev/vuln/GO-2026-6348) | `google.golang.org/grpc` | `demo/app` v1.83.0, `monitor` v1.82.1 | **v1.83.1** | 15 call paths in `demo/app`, incl. `worker.go:103` and `api.go:248`; `monitor/internal/counter/counter.go:55` |
+
+Heap memory exhaustion via HTTP/2 DATA frame fragmentation — a remote OOM in
+the gRPC transport that **every Temporal SDK call goes through**. It is
+reachable from Worker run loops and from the Visibility polling the monitor
+does on a timer.
+
+Unlike the standard-library findings above, this one is **fixed in this
+repository, not upstream of it**: it is a module version, so a `go get` closes
+it with no toolchain change and no rebuild of a base image.
+
+**Fixed.** Both modules bumped to `google.golang.org/grpc v1.83.1`; `go build`,
+`go vet` and `go test` pass in both; re-scan confirms `demo/app` back to 6
+reachable and `monitor` to 4, all standard library, none in any third-party
+module.
+
+The bump does **not** drag the toolchain forward with it, which is the thing
+worth checking before accepting a dependency fix you cannot rebuild the image
+to test: `grpc@v1.83.1` and the two `genproto` modules it pulls all declare
+`go 1.25.0`, and both `go.mod` files here declare `go 1.25.4` — so
+`golang:1.25-alpine` still builds them unchanged.
+
+Worth keeping visible as the lesson rather than the patch: `grpc` is an
+**indirect** dependency in both `go.mod` files. Nothing in this repo asks for
+it by name, nothing pins it, and it arrived at v1.83.0 in `demo/app` on the
+back of an unrelated OTel exporter. A dependency nobody chose, on the data path
+of every Temporal call, is exactly the one a scheduled scan is for.
 
 ---
 
@@ -470,7 +517,7 @@ hosts.
 <a id="d10"></a>**D10 — Images pinned by tag, not digest.** All eleven images use
 `${VAR:-version}` tags. Tags are mutable, so a rebuild can silently pull
 different bytes. Deliberate: it is also what lets a rebuild pick up the Go
-1.25.13 fix in P8 without a code change. Digest-pin for production, keep tags
+patch release that fixes P8 without a code change. Digest-pin for production, keep tags
 for the lab, and if you digest-pin add a scanner to tell you when to move.
 
 <a id="p6"></a>**P6 — S3 controls not fully closed.** `aws/terraform/export-sink`
@@ -502,7 +549,8 @@ Ordered by consequence, not effort.
 - [ ] Encrypt and lock the Terraform state backend; restrict who can read it (P4).
 - [ ] Make `external_id` required on the export sink (P5).
 - [ ] Narrow the Nexus callback allow-list and disable insecure callbacks (D11).
-- [ ] Rebuild images to pick up go1.25.13 (P8), and re-run the scan.
+- [ ] Rebuild images to pick up the current Go patch release (P8), and re-run the scan.
+- [x] Bump `google.golang.org/grpc` to v1.83.1 in both modules (P8b). Done 2026-09-28.
 - [ ] Decide your redaction policy for **logs** before shipping them to Loki. The collector redacts span payloads; nothing redacts log lines (D4).
 
 ---
@@ -559,6 +607,19 @@ cd demo && bash scripts/validate.sh
 ---
 
 ## 6. Reporting a vulnerability
+
+<!-- REPLACE_ME(disclosure-policy): GitHub renders THIS FILE as the repository's
+     official vulnerability-reporting policy. Two things below are wrong the
+     moment Temporal owns the repo:
+       1. "not a Temporal product / no security SLA" — must match whatever
+          support posture is chosen in README.md. The two cannot disagree.
+       2. "contact the maintainer directly" and "no bounty is offered" — must
+          route into Temporal's real security process and must not contradict
+          any bounty programme Temporal runs.
+     Replace with the org-standard disclosure text. The routing for bugs in
+     Temporal ITSELF (temporal.io/security) and in upstream components is
+     already correct and should survive the rewrite. Do not ship with this
+     comment still present. -->
 
 This is a **community** repository. It is not a Temporal product, it is not
 supported by Temporal, and it carries no security SLA — see `LICENSE` and the
