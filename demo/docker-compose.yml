@@ -107,6 +107,9 @@ services:
       TEMPORAL_ADDRESS: temporal:7233
       TEMPORAL_NAMESPACE: default
       TASK_QUEUE: orders
+      # Where POST /agent sends work. Distinct from TASK_QUEUE above so the two
+      # workloads never share slots — see the agent-worker service.
+      AGENT_TASK_QUEUE: agents
       HTTP_PORT: "8081"
       METRICS_PORT: "8077"
       OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
@@ -144,6 +147,77 @@ services:
     # No published ports — this service gets scaled up and down during chaos
     # runs, and host port bindings would collide. Prometheus finds every
     # replica through Compose DNS instead (see prometheus.yml).
+    networks: [tobs]
+
+  # ---------------------------------------------------------------------------
+  # AI agent Workers
+  #
+  # A SEPARATE TASK QUEUE from the order Workers, and that is the design point
+  # rather than tidiness. Agent Activities block on a provider's HTTP response
+  # for seconds; order Activities finish in milliseconds. Share a queue and one
+  # burst of agent traffic holds every slot — the resulting schedule-to-start
+  # spike lands on the ORDER queue with nothing in the order path to explain it,
+  # which is among the harder incidents to diagnose from a dashboard.
+  #
+  # Note the slot count: 50, against 10 on the order Worker. An agent Activity
+  # is almost entirely IO-wait, so slots sized for CPU work leave the Worker
+  # idle while its queue backs up. That failure looks exactly like "we need more
+  # Workers" and is not — see docs/SCALE-TESTING.md.
+  # ---------------------------------------------------------------------------
+  agent-worker:
+    build: ./app
+    depends_on:
+      temporal:
+        condition: service_healthy
+    environment:
+      MODE: worker
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_NAMESPACE: default
+      TASK_QUEUE: agents
+      AGENT_TASK_QUEUE: agents
+      # Distinguishes this Worker's gen_ai_* series from the order Worker's.
+      # Without it both report service_name="temporal-worker" and the agent
+      # fleet cannot be isolated on the dashboard.
+      OTEL_SERVICE_NAME: temporal-agent-worker
+      METRICS_PORT: "8077"
+      MAX_CONCURRENT_ACTIVITIES: "50"
+      MAX_CONCURRENT_WORKFLOW_TASKS: "20"
+      OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
+      PYROSCOPE_ADDRESS: http://pyroscope:4040
+      # Absent by default, and the demo works anyway: the agent's default
+      # provider is an offline mock that needs no key and no egress. Set these
+      # in .env to drive real models — see .env.example.
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      ANTHROPIC_MODEL: "${ANTHROPIC_MODEL:-claude-opus-5}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      OPENAI_BASE_URL: "${OPENAI_BASE_URL:-}"
+      OPENAI_MODEL: "${OPENAI_MODEL:-}"
+    networks: [tobs]
+
+  # The LangChain Worker is OPT-IN behind a compose profile.
+  #
+  #   docker compose --profile langchain up -d agent-worker-langchain
+  #
+  # Two reasons it is not in the default set. The image is large — LangChain's
+  # dependency tree is several hundred megabytes — and unlike the Go agent it
+  # has no offline mock provider, so without an API key it would sit in a crash
+  # loop and make a working stack look broken.
+  agent-worker-langchain:
+    build: ./agent-python
+    profiles: [langchain]
+    depends_on:
+      temporal:
+        condition: service_healthy
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_NAMESPACE: default
+      AGENT_TASK_QUEUE: agents-langchain
+      MAX_CONCURRENT_ACTIVITIES: "50"
+      OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      OPENAI_BASE_URL: "${OPENAI_BASE_URL:-}"
+      OPENAI_MODEL: "${OPENAI_MODEL:-}"
     networks: [tobs]
 
   # ---------------------------------------------------------------------------
@@ -327,6 +401,11 @@ services:
     ports:
       - "4317:4317"
       - "4318:4318"
+      # Prometheus scrape endpoint for the gen_ai_* agent metrics. Published so
+      # `curl localhost:8889/metrics | grep gen_ai` works from the host — which
+      # is the fastest way to tell "the agent is not emitting" from "Prometheus
+      # is not scraping", and validate.sh uses exactly that.
+      - "8889:8889"
     networks: [tobs]
 
   tempo:

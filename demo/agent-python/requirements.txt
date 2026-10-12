@@ -1,0 +1,21 @@
+# Pinned for the same reason demo/app/go.mod is pinned: an unpinned LLM
+# dependency is the first thing that breaks a demo, and it breaks it on
+# someone else's laptop rather than here.
+#
+# Refresh deliberately with `make agent-py-deps-refresh`, not silently at
+# build time.
+
+temporalio==1.32.0
+
+# LangChain 1.x. The agent entry point is `create_agent` from
+# `langchain.agents`; the 0.x `AgentExecutor` / `initialize_agent` APIs that
+# most tutorials still show do not exist here.
+langchain==1.4.0
+langchain-core==1.6.1
+langchain-anthropic==1.7.1
+langchain-openai==1.6.0
+
+# OTel metrics only. Traces come from the Temporal Python SDK's own
+# interceptor, configured in the collector rather than here.
+opentelemetry-sdk==1.44.0
+opentelemetry-exporter-otlp-proto-grpc==1.44.0

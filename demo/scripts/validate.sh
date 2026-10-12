@@ -57,7 +57,12 @@ else
 import json,sys
 for t in json.load(sys.stdin)['data']['activeTargets']:
     print(f\"{t['labels'].get('job')}|{t['health']}|{t['scrapeUrl']}\")")
-  for expect in temporal-service temporal-sdk-api temporal-sdk-worker; do
+  # temporal-sdk-agent-worker and otel-collector-genai carry the agent stack.
+  # Both are asserted on PRESENCE, like the rest: a job missing from the config
+  # is a wiring bug, whereas a job that is present and down is already reported
+  # by the loop above.
+  for expect in temporal-service temporal-sdk-api temporal-sdk-worker \
+                temporal-sdk-agent-worker otel-collector-genai; do
     echo "$targets" | grep -q "\"job\":\"$expect\"" || bad "target $expect not present at all"
   done
 fi
@@ -79,6 +84,31 @@ check_metric temporal_worker_task_slots_available "SDK metrics dark; app is not 
 check_metric poll_success_sync                    "run 'make smoke' first — this is a counter"
 check_metric workflow_success                     "no Workflows have completed yet"
 
+# GenAI agent families, gated.
+#
+# These series do not EXIST until an agent has run — OTel creates an instrument
+# on first record, not at startup. Failing on their absence would report a
+# perfectly healthy stack that nobody has driven yet as broken, which is the
+# same mistake the traffic gate in section 5 exists to avoid.
+#
+# The gate is gen_ai_agent_runs_total: one agent execution of any provider
+# creates it, and nothing else does.
+agent_runs=$(curl -sf "$PROM/api/v1/query" --data-urlencode "query=count(gen_ai_agent_runs_total)" 2>/dev/null | python3 -c "
+import json,sys
+r=json.load(sys.stdin)['data']['result']
+print(r[0]['value'][1] if r else '0')" 2>/dev/null || echo 0)
+if [ "$agent_runs" != "0" ]; then
+  check_metric gen_ai_agent_runs_total          "agent ran but the counter is missing"
+  check_metric gen_ai_client_token_usage_sum    "token usage not reaching the collector"
+  check_metric gen_ai_client_cost_total         "cost instrument dark — check the price table"
+  check_metric gen_ai_client_operation_duration_seconds_count \
+                                                "model-call histogram missing"
+  check_metric gen_ai_agent_loop_iterations_count \
+                                                "loop-depth histogram missing"
+else
+  warn "no agent has run yet — gen_ai_* families unverified. Run 'make agent-demo'"
+fi
+
 # -----------------------------------------------------------------------------
 hdr "4. Rules loaded and evaluating"
 # -----------------------------------------------------------------------------
@@ -96,7 +126,12 @@ d=json.load(sys.stdin)['data']['groups']
 # rule evaluates.
 expected_groups=['temporal-service-health','temporal-task-queue-health',
                  'temporal-worker-fleet','temporal-application-health',
-                 'temporal-slo-sli','temporal-slo-meta','temporal-slo-burn']
+                 'temporal-slo-sli','temporal-slo-meta','temporal-slo-burn',
+                 # agent-rules.yml. These load whether or not an agent has ever
+                 # run — a recording rule over an absent series is healthy and
+                 # evaluates to nothing, so this is a wiring check, not a
+                 # traffic check.
+                 'genai-agent-recording','genai-agent-alerts']
 got={g['name']:len(g['rules']) for g in d}
 rc=0
 for name in expected_groups:
@@ -106,7 +141,7 @@ unhealthy=[r['name'] for g in d for r in g['rules'] if r.get('health') not in ('
 if unhealthy: print(f'  \033[31m FAIL\033[0m  unhealthy rules: {unhealthy}'); rc=1
 else: print('  \033[32m PASS\033[0m  all rules healthy')
 sys.exit(rc)
-" && PASS=$((PASS+8)) || FAIL=$((FAIL+1))
+" && PASS=$((PASS+10)) || FAIL=$((FAIL+1))
 fi
 
 # -----------------------------------------------------------------------------
@@ -116,7 +151,7 @@ hdr "5. Dashboard panel queries"
 # If you add one, add it here too, with the reason — an undocumented empty panel
 # is indistinguishable from a broken one.
 python3 - <<'PY'
-import json, glob, os, sys, urllib.parse, urllib.request
+import json, glob, os, re, sys, urllib.parse, urllib.request
 
 PROM = os.environ.get("PROM", "http://localhost:9090")
 LOKI = os.environ.get("LOKI", "http://localhost:3100")
@@ -144,6 +179,20 @@ if not HAS_TRAFFIC:
     print("\n  \033[33mNOTE\033[0m  no Activity traffic in the last 10m — panels that need")
     print("        traffic will WARN rather than FAIL. Run 'make smoke' or")
     print("        'make baseline', wait ~30s, and re-run for a full check.")
+
+# The same gate, for agents, on its own axis.
+#
+# Activity traffic and agent traffic are INDEPENDENT: `make baseline` drives the
+# order Workflow and creates no gen_ai_* series at all. Without a separate gate
+# the AI agent board fails every panel on a stack that is running perfectly and
+# has simply never been asked to run an agent — and a validator that is red by
+# default is one people stop reading.
+_a = _q("sum(gen_ai_agent_runs_total)")
+HAS_AGENT = bool(_a) and float(_a[0]["value"][1]) > 0
+if not HAS_AGENT:
+    print("  \033[33mNOTE\033[0m  no agent has ever run — gen_ai_* panels will WARN rather")
+    print("        than FAIL. Run 'make agent-demo' (offline mock, no API key)")
+    print("        and re-run for a full check.")
 
 # Matched CASE-INSENSITIVELY: the same concept is titled differently on
 # different dashboards ("Workflow Outcomes" vs "Workflow outcomes"), and an
@@ -181,6 +230,12 @@ EXPECTED_EMPTY = {k.lower(): v for k, v in {
         "no server errors or warnings right now — the healthy state",
     "Find stuck executions (workflow IDs)":
         "no non-determinism or Workflow Task failures — this being empty is the GOOD outcome",
+    # AI agent board. Measured 2026-09-28 after `make agent-demo`: 18 of 19
+    # queries return data and this is the only empty one, which is the healthy
+    # state — it lists models that produced tokens but matched no price, so
+    # anything here means the cost panels are silently under-reporting.
+    "Unpriced models (spend is UNDER-REPORTED)":
+        "every model in play is priced — a row here means cost is UNDER-REPORTED",
     # Span metrics are generated by Tempo from SAMPLED TRACES and go stale within
     # minutes of the last trace. Measured: empty on an idle stack, 105 series
     # about a minute after driving traffic. Empty here means "no recent traces",
@@ -253,8 +308,26 @@ for path in sorted(glob.glob("grafana/dashboards/*/*.json")):
             e = t.get("expr")
             if not e:
                 continue
+            # Resolve Grafana-only syntax the SAME WAY for every board, rather
+            # than naming the variables one board happens to use.
+            #
+            # This was a hardcoded list of $namespace and $task_queue, and it
+            # silently mis-reported two entire dashboards the moment boards
+            # arrived using other names: the agent board's 18 panels all
+            # "returned NO DATA" because `service_name=~"$service"` was sent to
+            # Prometheus with the dollar sign still in it and matched nothing,
+            # and worker-scale's subquery panels came back HTTP 400 because
+            # `[$__range:]` is not parseable PromQL. Both boards were correct;
+            # the validator was not — which is the worse failure of the two,
+            # because it accuses working panels.
             e2 = (e.replace("$__rate_interval", "5m").replace("$__interval", "1m")
-                   .replace("$namespace", ".*").replace("$task_queue", ".*"))
+                   .replace("$__range", "1h"))
+            # Any remaining template variable inside a label matcher becomes
+            # match-all, the closest analogue to Grafana's "All" selection, and
+            # keeps the expression syntactically valid. Same rule as
+            # tools/check_dashboard_queries.py — keep the two in step.
+            e2 = re.sub(r'=~"\$[A-Za-z_][A-Za-z0-9_]*"', '=~".*"', e2)
+            e2 = re.sub(r'="\$[A-Za-z_][A-Za-z0-9_]*"', '=~".*"', e2)
             # Route by the panel's datasource, not by guessing from the query.
             ds = (t.get("datasource") or p.get("datasource") or {})
             st, info = q_loki(e2) if ds.get("type") == "loki" else q(e2)
@@ -263,6 +336,8 @@ for path in sorted(glob.glob("grafana/dashboards/*/*.json")):
                 print(f"    \033[32m PASS\033[0m  {title[:58]}")
             elif st == "EMPTY" and title.lower() in EXPECTED_EMPTY:
                 print(f"    \033[33m ----\033[0m  {title[:58]}  (empty by design: {EXPECTED_EMPTY[title.lower()]})")
+            elif st == "EMPTY" and "gen_ai_" in e and not HAS_AGENT:
+                print(f"    \033[33m WARN\033[0m  {title[:58]}  no data (no agent has run)")
             elif st == "EMPTY" and not HAS_TRAFFIC:
                 print(f"    \033[33m WARN\033[0m  {title[:58]}  no data (no traffic yet)")
             elif st == "EMPTY":
@@ -514,6 +589,32 @@ PY
   done <<< "$link_out"
 else
   warn "Tempo not reachable at $TEMPO_URL — trace buttons unverified"
+fi
+
+# -----------------------------------------------------------------------------
+hdr "10. GenAI contract parity (Go <-> Python)"
+# -----------------------------------------------------------------------------
+# The AI agent board's central claim is that a panel cannot tell which SDK
+# produced a number. Two independent implementations of one contract drift, and
+# the drift is SILENT: a cost panel that is right for Go and 10x wrong for
+# Python still renders, still trends, and still gets believed.
+#
+# agent-python/test_parity.py holds the Go test cases verbatim. It needs the
+# OTel Python packages, which are in the langchain image and not necessarily on
+# the host — so a missing import is a WARN, not a failure. Absent deps is not
+# evidence of drift, and turning it into one would make this section red on
+# every machine that has never built the optional Python worker.
+if python3 -c "import opentelemetry.exporter.otlp.proto.grpc.metric_exporter" 2>/dev/null; then
+  parity_out="$(cd agent-python && python3 test_parity.py 2>&1)"
+  if printf '%s' "$parity_out" | grep -q "^0 failure"; then
+    ok "Go/Python parity: $(printf '%s' "$parity_out" | grep -c '^PASS') cases agree (cost, taxonomy, instrument and attribute names)"
+  else
+    bad "Go/Python parity FAILED — the two SDKs no longer emit the same contract:
+$(printf '%s' "$parity_out" | grep -E '^(FAIL|[0-9]+ failure)' | head -5)"
+  fi
+else
+  warn "Go/Python parity unverified — OTel Python packages not on this host.
+         Run it in the image instead: 'make agent-py-test'"
 fi
 
 # -----------------------------------------------------------------------------

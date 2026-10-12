@@ -84,11 +84,78 @@ processors:
     timeout: 5s
     send_batch_size: 512
 
+  # ---------------------------------------------------------------------------
+  # GENAI METRIC HYGIENE
+  #
+  # The agent Workers emit gen_ai.* metrics (see demo/app/agent_telemetry.go).
+  # Two things have to be true before those reach Prometheus, and neither is the
+  # application's job:
+  #
+  #  1. NO PROMPT OR COMPLETION TEXT ON A METRIC. The GenAI conventions define
+  #     optional attributes carrying prompt and response content. On a SPAN that
+  #     is a defensible trade; on a METRIC it is unbounded cardinality made of
+  #     customer data — every distinct prompt becomes a permanent time series.
+  #     Dropping them here means no SDK, no auto-instrumentation and no future
+  #     Worker can leak them by default.
+  #
+  #  2. MODEL NAMES MUST NOT BE FREE TEXT. A caller passing a dated snapshot
+  #     ("claude-opus-5-20260101") creates a series that never joins the one for
+  #     "claude-opus-5", so a cost panel silently splits in two the day someone
+  #     pins a version. Normalising centrally is the same argument the span
+  #     transform above already makes.
+  # ---------------------------------------------------------------------------
+  attributes/genai_redact:
+    actions:
+      - key: gen_ai.prompt
+        action: delete
+      - key: gen_ai.completion
+        action: delete
+      - key: gen_ai.input.messages
+        action: delete
+      - key: gen_ai.output.messages
+        action: delete
+      - key: gen_ai.system_instructions
+        action: delete
+
+  transform/genai_model_normalise:
+    error_mode: ignore
+    metric_statements:
+      - context: datapoint
+        statements:
+          # Strip a trailing -YYYYMMDD snapshot suffix so pinned and floating
+          # model IDs aggregate together.
+          - replace_pattern(attributes["gen_ai.request.model"], "-[0-9]{8}$", "")
+          - replace_pattern(attributes["gen_ai.response.model"], "-[0-9]{8}$", "")
+
 exporters:
   otlp/tempo:
     endpoint: tempo:4317
     tls:
       insecure: true
+
+  # Prometheus SCRAPE endpoint rather than remote-write.
+  #
+  # Remote-write would have been fewer moving parts, but it makes the collector
+  # push into Prometheus, and a push pipeline has no "target down" signal: if the
+  # collector dies, the series simply stop and the panel shows a flat line that
+  # looks like zero traffic. With a scrape target, Prometheus reports `up == 0`
+  # and the difference between "no agents ran" and "we lost the collector"
+  # remains visible. That distinction is the entire subject of this repo.
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    # The metric names already carry their namespace (gen_ai_*), so an added
+    # prefix would only make every query longer.
+    namespace: ""
+    # Resource attributes (service.name, deployment.environment) become labels
+    # rather than being dropped. Without this, two agent Workers in different
+    # environments are indistinguishable in Prometheus even though the OTLP
+    # payload could tell them apart.
+    resource_to_telemetry_conversion:
+      enabled: true
+    # Keep series alive across scrape gaps. An agent fleet is bursty by nature —
+    # without this a counter that stops incrementing disappears entirely, and
+    # increase() over the window that contains the gap under-reports.
+    metric_expiration: 10m
 
 service:
   telemetry:
@@ -102,5 +169,24 @@ service:
         - transform/temporal_attributes
         - resource/environment
         - attributes/redact
+        - attributes/genai_redact
         - batch
       exporters: [otlp/tempo]
+
+    # Metrics pipeline — gen_ai.* only, in practice.
+    #
+    # This does NOT carry Temporal SDK metrics and must not start doing so.
+    # Those come from Tally and are scraped directly off each process on :8077;
+    # routing them through here as well would produce a SECOND copy of every
+    # Temporal series under different names (the OTel exporter drops the
+    # _seconds suffix the dashboards depend on), and the two would disagree.
+    # tracing.go makes the same argument at length for traces.
+    metrics:
+      receivers: [otlp]
+      processors:
+        - memory_limiter
+        - resource/environment
+        - attributes/genai_redact
+        - transform/genai_model_normalise
+        - batch
+      exporters: [prometheus]

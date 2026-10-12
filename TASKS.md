@@ -75,6 +75,45 @@ golden-signals board via `tools/add_poll_outcome_panels.py`.
 
 `make validate` passes **37/37, 0 warnings**, stable across repeated runs.
 
+## Added 2026-09-26
+
+**AI agent observability.** A durable agent loop in the Go demo app
+(`demo/app/agent_workflow.go`) with three providers — Anthropic, OpenAI, and an
+**offline deterministic mock that needs no API key and no egress** — plus an
+optional LangChain/Python worker on its own task queue. Both emit ONE contract,
+the OTel GenAI semantic conventions (`gen_ai.client.token.usage`,
+`gen_ai.client.operation.duration`, `gen_ai.system`, …), so a single board
+covers three SDKs in two languages. Board:
+`grafana/dashboards/custom/ai-agent-observability.json` (16 panels), rules:
+`prometheus/agent-rules.yml` (9 recording, 6 alerts). Written up in
+[`demo/docs/AI-AGENT-OBSERVABILITY.md`](demo/docs/AI-AGENT-OBSERVABILITY.md).
+
+The point of the board is the three failures that **move no Temporal metric**,
+because none of them is an error: an agent that loops to its cap returns a
+*successful* Workflow that answered nothing; one whose prompt cache stopped
+hitting costs 3x at identical latency; one that quietly stopped calling a tool
+looks perfect everywhere else. `make agent-runaway` demonstrates the first with
+every golden-signals panel flat.
+
+**OTel metrics pipeline**, alongside the existing Tally path rather than
+replacing it. The two exporters emit **different names for the same Temporal
+metrics**, so consolidating would rename every series the existing rules and
+dashboards are built on. New namespace only: OTLP in, prometheus exporter on
+`:8889`, scraped as `otel-collector-genai`, with four constant labels dropped
+at scrape time.
+
+**`validate.sh` extended** — the two new scrape jobs, the two GenAI rule groups,
+the `gen_ai_*` metric families, and a new §10 that runs the Go↔Python contract
+parity test (6 cases: cost maths, error taxonomy, instrument names, attribute
+names). A new gate keeps it honest rather than red-by-default: `gen_ai_*`
+panels WARN instead of FAIL until an agent has run.
+
+**`make agent-py-test` now works without the OTel Python packages installed** —
+it falls back to running the parity test inside the langchain image, which the
+image now carries. It failed with `ModuleNotFoundError` on any host that had
+not installed them, which is most hosts, since the whole point of that image is
+that nobody has to.
+
 ## In flight
 
 Nothing. The self-serve observability module listed here previously was

@@ -82,7 +82,10 @@ cd demo
 ```
 
 Checks prerequisites and ports, builds, waits for every service to be genuinely
-ready, seeds traffic, and runs 37 validation checks. Takes a few minutes on
+ready, seeds traffic, and runs the full validation suite — containers, scrape
+targets, every rule group, every panel query on every provisioned dashboard,
+logs, SLO state, alert state, trace deep links, and Go/Python agent contract
+parity. Takes a few minutes on
 first build (Go modules + images). Then:
 
 | | |
@@ -103,7 +106,7 @@ What was translated, replaced and dropped is in
 [`docs/CLOUD-TO-SELFHOSTED.md`](docs/CLOUD-TO-SELFHOSTED.md).
 
 ```bash
-make validate       # re-run all 37 checks any time
+make validate       # re-run every check any time
 make chaos-slots    # watch an error budget drain
 make chaos-stuck    # the one where nothing moves — and that IS the finding
 make chaos-stuck-release   # required cleanup
@@ -111,6 +114,31 @@ make help           # everything else
 ```
 
 Full walkthrough and troubleshooting: [`demo/SETUP.md`](demo/SETUP.md).
+
+---
+
+## AI agents
+
+An agent fleet fails in ways a Temporal dashboard cannot see, and all three of
+them for the same reason: **none of them is an error**. An agent that loops to
+its cap returns a *successful* Workflow that answered nothing. One whose prompt
+cache stopped hitting costs three times as much at identical latency, error
+rate and throughput. One that quietly stopped calling a tool looks perfect on
+every panel in this repo.
+
+The **AI Agents — GenAI Observability** board watches spend, tokens, cache hit
+ratio, loop depth, tool outcomes and model-call errors on the OTel GenAI
+semantic conventions — one contract emitted by three providers across two
+languages (Go/Anthropic, Go/OpenAI, Python/LangChain) and an **offline mock
+that needs no API key and no egress**.
+
+```bash
+make agent-demo      # ~20 runs against the offline mock — fills every panel
+make agent-runaway   # loops to the cap, spends money, and NO alert fires
+make agent-test      # cost maths, error taxonomy, loop termination
+```
+
+Docs: [`demo/docs/AI-AGENT-OBSERVABILITY.md`](demo/docs/AI-AGENT-OBSERVABILITY.md).
 
 ---
 
@@ -143,6 +171,7 @@ result. A few that changed the numbers:
 
 Docs: [`demo/docs/SLO-GUIDE.md`](demo/docs/SLO-GUIDE.md) ·
 [`demo/docs/CHAOS-RUNBOOK.md`](demo/docs/CHAOS-RUNBOOK.md) ·
+[`demo/docs/AI-AGENT-OBSERVABILITY.md`](demo/docs/AI-AGENT-OBSERVABILITY.md) ·
 [`demo/docs/NEXUS.md`](demo/docs/NEXUS.md) ·
 [`production/docs/SERVERLESS-WORKERS.md`](production/docs/SERVERLESS-WORKERS.md)
 

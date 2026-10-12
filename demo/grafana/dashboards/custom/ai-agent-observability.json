@@ -1,0 +1,1312 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "links": [
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "tags": [],
+      "targetBlank": false,
+      "title": "Golden signals",
+      "tooltip": "Temporal RED + saturation for these Workers",
+      "type": "link",
+      "url": "/d/temporal-golden-signals"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "tags": [],
+      "targetBlank": false,
+      "title": "Worker scale",
+      "tooltip": "Capacity and slot sizing for the agent fleet",
+      "type": "link",
+      "url": "/d/temporal-worker-scale"
+    }
+  ],
+  "panels": [
+    {
+      "type": "text",
+      "title": "",
+      "id": 1,
+      "transparent": true,
+      "gridPos": {
+        "h": 5,
+        "w": 3,
+        "x": 0,
+        "y": 0
+      },
+      "options": {
+        "mode": "html",
+        "code": {
+          "language": "plaintext",
+          "showLineNumbers": false,
+          "showMiniMap": false
+        },
+        "content": "<div style=\"background:#444CE7;border-radius:3px;\n  height:100%;display:flex;flex-direction:column;align-items:center;\n  justify-content:center;padding:0.6em;text-align:center;color:#fff;\">\n  <div style=\"font-size:15px;font-weight:700;letter-spacing:.02em;\">AI Agents</div>\n  <div style=\"font-size:11px;opacity:.85;margin-top:2px;\">OTel GenAI</div>\n</div>"
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Spend rate",
+      "id": 2,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 3,
+        "y": 0
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(gen_ai_client_cost_total{service_name=~\"$service\", gen_ai_system=~\"$provider\"}[$__rate_interval])) * 3600",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "description": "Estimated USD per hour at the CURRENT rate, extrapolated from the selected window.\n\nThis is a LIST-PRICE estimate and will not match an invoice: negotiated discounts, committed-use terms and batch pricing all move the real figure. Read it as a trend and an attribution tool, never as a finance source of truth.\n\nA model with no entry in agentPricing contributes ZERO here \u2014 see the 'Unpriced models' panel at the bottom, which exists to stop that silently understating the total.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "currencyUSD",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#199e70",
+                "value": null
+              },
+              {
+                "color": "#ec835a",
+                "value": 5
+              },
+              {
+                "color": "#d03b3b",
+                "value": 20
+              }
+            ]
+          },
+          "decimals": 3,
+          "noValue": "no spend"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "auto",
+        "justifyMode": "auto",
+        "wideLayout": true
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Tokens / sec",
+      "id": 3,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 7,
+        "y": 0
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(gen_ai_client_token_usage_sum{service_name=~\"$service\", gen_ai_system=~\"$provider\", gen_ai_token_type=~\"input|output\"}[$__rate_interval]))",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "description": "Input + output tokens per second.\n\nDeliberately EXCLUDES the reasoning and cached series: both are subsets already counted inside input/output, and summing all four double-counts. This is the one place on the board where the token_type filter is load-bearing rather than cosmetic.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#3987e5",
+                "value": null
+              }
+            ]
+          },
+          "decimals": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "auto",
+        "justifyMode": "auto",
+        "wideLayout": true
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Agent runs / min",
+      "id": 4,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 11,
+        "y": 0
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(gen_ai_agent_runs_total{service_name=~\"$service\"}[$__rate_interval])) * 60",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "description": "Completed agent runs per minute, all outcomes.\n\nThe denominator for every per-run figure on this board.\n\nNote this panel does NOT respect the Provider picker, and cannot: a run is recorded once at the end, when it is no longer attributable to a single provider \u2014 an agent may switch models between iterations, and a refusal fallback does exactly that. Filtering run counts by provider would quietly drop those runs rather than splitting them.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#3987e5",
+                "value": null
+              }
+            ]
+          },
+          "decimals": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "auto",
+        "justifyMode": "auto",
+        "wideLayout": true
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Cost per run",
+      "id": 5,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 15,
+        "y": 0
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(gen_ai_client_cost_total{service_name=~\"$service\", gen_ai_system=~\"$provider\"}[$__rate_interval])) / clamp_min(sum(rate(gen_ai_agent_runs_total{service_name=~\"$service\"}[$__rate_interval])), 0.0001)",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "description": "Mean USD per agent run.\n\nTHE MOST USEFUL SINGLE NUMBER ON THIS BOARD, because it is the one that survives a change in traffic. Total spend rising with volume is expected; cost per run rising is a regression, and it moves for reasons nothing else here shows \u2014 a longer prompt, a chattier model, a cache that stopped hitting, an agent taking more turns to reach the same answer.\n\nclamp_min avoids a divide-by-zero producing +Inf on an idle fleet.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "currencyUSD",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#199e70",
+                "value": null
+              },
+              {
+                "color": "#ec835a",
+                "value": 0.05
+              },
+              {
+                "color": "#d03b3b",
+                "value": 0.25
+              }
+            ]
+          },
+          "decimals": 4,
+          "noValue": "idle"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "auto",
+        "justifyMode": "auto",
+        "wideLayout": true
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Cache hit ratio",
+      "id": 6,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 5,
+        "x": 19,
+        "y": 0
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(gen_ai_client_token_usage_sum{service_name=~\"$service\", gen_ai_system=~\"$provider\", gen_ai_token_type=\"cached\"}[$__rate_interval])) / clamp_min(sum(rate(gen_ai_client_token_usage_sum{service_name=~\"$service\", gen_ai_system=~\"$provider\", gen_ai_token_type=\"input\"}[$__rate_interval])), 0.0001)",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "description": "Share of input tokens served from the prompt cache.\n\nTHE SINGLE BIGGEST LEVER ON SPEND. Cached input bills at roughly a tenth of the normal rate, so a fleet that moves from 0% to 80% cuts its input cost by ~72% with no change in behaviour.\n\nIt is also the metric most likely to regress silently: prompt caching is a PREFIX match, so a timestamp, a UUID or a per-user string interpolated anywhere near the front of the prompt invalidates everything after it. Nothing breaks, nothing slows down, and the bill roughly triples. If this drops after a deploy, look at what got added to the top of the system prompt.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#d03b3b",
+                "value": null
+              },
+              {
+                "color": "#ec835a",
+                "value": 0.2
+              },
+              {
+                "color": "#0ca30c",
+                "value": 0.5
+              }
+            ]
+          },
+          "decimals": 2,
+          "noValue": "no cache"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "auto",
+        "justifyMode": "auto",
+        "wideLayout": true
+      }
+    },
+    {
+      "type": "row",
+      "title": "A \u00b7 Cost and token flow",
+      "collapsed": false,
+      "id": 7,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 5
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Spend by provider and model",
+      "id": 8,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 6
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum by (gen_ai_system, gen_ai_response_model) (rate(gen_ai_client_cost_total{service_name=~\"$service\", gen_ai_system=~\"$provider\"}[$__rate_interval])) * 3600",
+          "range": true,
+          "instant": false,
+          "refId": "A",
+          "legendFormat": "{{gen_ai_system}} / {{gen_ai_response_model}}"
+        }
+      ],
+      "description": "USD per hour, split by provider and by the model that ACTUALLY served the request.\n\nSplit on gen_ai_response_model rather than gen_ai_request_model on purpose. The two differ whenever the provider serves something other than what was asked for \u2014 a refusal fallback re-running on a second model, or an alias resolving to a dated snapshot. Attributing that spend to the requested model would hide the fallback entirely, and a fallback is exactly the event you want to see on a cost chart.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "currencyUSD",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 25,
+            "showPoints": "never",
+            "spanNulls": false,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "axisSoftMin": 0,
+            "drawStyle": "line",
+            "stacking": {
+              "group": "A",
+              "mode": "normal"
+            }
+          },
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Token flow by type",
+      "id": 9,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 6
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum by (gen_ai_token_type) (rate(gen_ai_client_token_usage_sum{service_name=~\"$service\", gen_ai_system=~\"$provider\"}[$__rate_interval]))",
+          "range": true,
+          "instant": false,
+          "refId": "A",
+          "legendFormat": "{{gen_ai_token_type}}"
+        }
+      ],
+      "description": "Tokens per second by type. NOT STACKED, deliberately.\n\n'reasoning' is a subset of 'output' and 'cached' is a subset of 'input', so stacking these four would draw a total that is roughly double the truth. They share an axis so the RATIOS are readable, which is what matters:\n\n  reasoning / output   how much you are paying for thinking you never see\n  cached / input       the cache hit ratio, in its raw form\n\nInput climbing faster than output is the signature of a long agent loop: every iteration re-sends the whole conversation, so input grows QUADRATICALLY with loop depth while output stays flat.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "short",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "axisSoftMin": 0,
+            "drawStyle": "line"
+          },
+          "decimals": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "mean"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "B \u00b7 Agent behaviour \u2014 the failures no error rate shows",
+      "collapsed": false,
+      "id": 10,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 14
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Loop depth (iterations per run)",
+      "id": 11,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 15
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(gen_ai_agent_loop_iterations_bucket{service_name=~\"$service\"}[$__rate_interval])))",
+          "range": true,
+          "instant": false,
+          "refId": "A",
+          "legendFormat": "p50"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(gen_ai_agent_loop_iterations_bucket{service_name=~\"$service\"}[$__rate_interval])))",
+          "range": true,
+          "instant": false,
+          "refId": "B",
+          "legendFormat": "p95"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(gen_ai_agent_loop_iterations_bucket{service_name=~\"$service\"}[$__rate_interval])))",
+          "range": true,
+          "instant": false,
+          "refId": "C",
+          "legendFormat": "p99"
+        }
+      ],
+      "description": "Model calls made before a run reached a final answer.\n\nTHE RUNAWAY DETECTOR. An agent that loops is the most expensive failure mode there is and the least visible: nothing errors, nothing retries, nothing slows down, no queue backs up. Every Temporal signal in this repo stays flat while the bill climbs.\n\nWatch the p99 rather than the mean. A fleet where most runs finish in two turns and one in a hundred grinds to the cap has a healthy-looking average and a real problem.\n\nA p99 pinned exactly at MaxIterations means runs are being CUT OFF, not finishing \u2014 cross-check against the outcome panel to the right.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "short",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "axisSoftMin": 0,
+            "drawStyle": "line"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#199e70",
+                "value": null
+              },
+              {
+                "color": "#ec835a",
+                "value": 5
+              },
+              {
+                "color": "#d03b3b",
+                "value": 8
+              }
+            ]
+          },
+          "decimals": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Run outcomes",
+      "id": 12,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 15
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum by (outcome) (rate(gen_ai_agent_runs_total{service_name=~\"$service\"}[$__rate_interval])) * 60",
+          "range": true,
+          "instant": false,
+          "refId": "A",
+          "legendFormat": "{{outcome}}"
+        }
+      ],
+      "description": "Runs per minute by terminal outcome.\n\n  completed        the model produced a final answer\n  max_iterations   the CAP stopped it, not the model \u2014 a full-price run that answered nothing\n  error            the provider or a tool failed the run outright\n\nmax_iterations is the one to watch and the one a conventional error rate misses entirely: from Temporal's point of view the Workflow COMPLETED successfully. It returned, it did not throw, and it burned the entire token budget getting nowhere.\n\nA steady trickle of these usually means the cap is too low for the task. A sudden rise usually means a tool started returning something the model cannot use, and it is retrying its way around the problem.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "short",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 25,
+            "showPoints": "never",
+            "spanNulls": false,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "axisSoftMin": 0,
+            "drawStyle": "line",
+            "stacking": {
+              "group": "A",
+              "mode": "normal"
+            }
+          },
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Tool calls by tool and outcome",
+      "id": 13,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 23
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum by (gen_ai_tool_name, outcome) (rate(gen_ai_agent_tool_calls_total{service_name=~\"$service\"}[$__rate_interval])) * 60",
+          "range": true,
+          "instant": false,
+          "refId": "A",
+          "legendFormat": "{{gen_ai_tool_name}} \u00b7 {{outcome}}"
+        }
+      ],
+      "description": "Tool invocations per minute.\n\nTwo outcome values are worth alerting on and neither is an error in any conventional sense:\n\n  bad_arguments   the model emitted JSON the schema rejects. Usually a tool description that is ambiguous, not a broken model \u2014 and retrying cannot fix it.\n  unknown_tool    the model asked for a tool that does not exist. This means the prompt and the tool list have DRIFTED APART, which happens quietly whenever a tool is removed and the system prompt still mentions it.\n\nThe absence of a tool matters as much as its failures. A tool whose call rate drops to zero after a prompt change is a silent capability regression: answers get worse, no technical signal moves at all.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "short",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "axisSoftMin": 0,
+            "drawStyle": "line"
+          },
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Reasoning token share",
+      "id": 14,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 23
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum by (gen_ai_response_model) (rate(gen_ai_client_token_usage_sum{service_name=~\"$service\", gen_ai_system=~\"$provider\", gen_ai_token_type=\"reasoning\"}[$__rate_interval])) / clamp_min(sum by (gen_ai_response_model) (rate(gen_ai_client_token_usage_sum{service_name=~\"$service\", gen_ai_system=~\"$provider\", gen_ai_token_type=\"output\"}[$__rate_interval])), 0.0001)",
+          "range": true,
+          "instant": false,
+          "refId": "A",
+          "legendFormat": "{{gen_ai_response_model}}"
+        }
+      ],
+      "description": "Fraction of billed output tokens spent on internal reasoning.\n\nReasoning tokens are billed at the output rate but never appear in the response body. Without this panel a bill that grows while visible output stays constant has no explanation anywhere in your telemetry.\n\nThis is the panel that tells you whether an effort setting is earning its cost. Moving from 'high' to 'xhigh' can double this share; whether the answers got better is a question only your evals can answer, but this is what tells you what you PAID for the attempt.\n\nEmpty is normal and correct for a model with thinking disabled, or for the mock provider.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "percentunit",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "axisSoftMin": 0,
+            "drawStyle": "line"
+          },
+          "decimals": 3,
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "mean"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "C \u00b7 Model call health",
+      "collapsed": false,
+      "id": 15,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 31
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Model call latency",
+      "id": 16,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 32
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.50, sum by (le, gen_ai_system) (rate(gen_ai_client_operation_duration_seconds_bucket{service_name=~\"$service\", gen_ai_system=~\"$provider\"}[$__rate_interval])))",
+          "range": true,
+          "instant": false,
+          "refId": "A",
+          "legendFormat": "p50 {{gen_ai_system}}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (le, gen_ai_system) (rate(gen_ai_client_operation_duration_seconds_bucket{service_name=~\"$service\", gen_ai_system=~\"$provider\"}[$__rate_interval])))",
+          "range": true,
+          "instant": false,
+          "refId": "B",
+          "legendFormat": "p95 {{gen_ai_system}}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.99, sum by (le, gen_ai_system) (rate(gen_ai_client_operation_duration_seconds_bucket{service_name=~\"$service\", gen_ai_system=~\"$provider\"}[$__rate_interval])))",
+          "range": true,
+          "instant": false,
+          "refId": "C",
+          "legendFormat": "p99 {{gen_ai_system}}"
+        }
+      ],
+      "description": "Wall-clock duration of ONE model call, bracketing the HTTP request only.\n\nIt deliberately excludes Activity scheduling. Folding Temporal queue latency in here would produce a panel labelled 'model latency' that rises when your OWN Worker fleet is backed up \u2014 blaming the provider for your capacity problem. To see that component, compare against activity schedule-to-start on the golden-signals board; the gap between them IS your queueing.\n\nBuckets run to 300s because a high-effort call on a hard prompt genuinely takes minutes. The OTel SDK's default boundaries stop at 10s, which would put every interesting call in +Inf and make every quantile here a lower bound rather than a measurement.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "s",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "axisSoftMin": 0,
+            "drawStyle": "line"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#199e70",
+                "value": null
+              },
+              {
+                "color": "#ec835a",
+                "value": 20
+              },
+              {
+                "color": "#d03b3b",
+                "value": 60
+              }
+            ]
+          },
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Model call errors by type",
+      "id": 17,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 32
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum by (error_type, gen_ai_system) (rate(gen_ai_client_operation_duration_seconds_count{service_name=~\"$service\", gen_ai_system=~\"$provider\", error_type!=\"\"}[$__rate_interval])) * 60",
+          "range": true,
+          "instant": false,
+          "refId": "A",
+          "legendFormat": "{{gen_ai_system}} \u00b7 {{error_type}}"
+        }
+      ],
+      "description": "Failed model calls per minute, bucketed by a taxonomy chosen for WHAT YOU DO NEXT:\n\n  rate_limit    back off, or raise the account limit\n  overloaded    provider-side; retry, nothing to fix locally\n  auth          a human must rotate a key \u2014 retrying is pure waste\n  timeout       raise the Activity timeout, or lower effort\n  refusal       a content decision, NOT a fault; never retry the same prompt\n  bad_request   a malformed call, i.e. a code bug; also never retryable\n\nThe last three are marked NonRetryable in the Workflow's retry policy, so the same taxonomy drives both this panel and the retry decision. That is deliberate: a bucket added to one and not the other means paying three times for an error that was never going to succeed.\n\nerror_type is present ONLY on failures. Successful calls carry no such label, which is why this query filters on error_type!=\"\" rather than on a status value.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "short",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 25,
+            "showPoints": "never",
+            "spanNulls": false,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "axisSoftMin": 0,
+            "drawStyle": "line",
+            "stacking": {
+              "group": "A",
+              "mode": "normal"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#199e70",
+                "value": null
+              },
+              {
+                "color": "#d03b3b",
+                "value": 1
+              }
+            ]
+          },
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "D \u00b7 Cost hygiene \u2014 can the numbers above be trusted?",
+      "collapsed": false,
+      "id": 18,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 40
+      },
+      "panels": []
+    },
+    {
+      "type": "table",
+      "title": "Unpriced models (spend is UNDER-REPORTED)",
+      "id": 19,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 41
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum by (gen_ai_system, gen_ai_response_model) (rate(gen_ai_client_token_usage_sum{service_name=~\"$service\", gen_ai_system=~\"$provider\", gen_ai_token_type=\"output\"}[$__rate_interval])) unless sum by (gen_ai_system, gen_ai_response_model) (rate(gen_ai_client_cost_total{service_name=~\"$service\", gen_ai_system=~\"$provider\"}[$__rate_interval])) > 0",
+          "range": false,
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "description": "Models that are burning output tokens but contributing NOTHING to the cost panels.\n\nThe pricing table is a hand-maintained list of published rates. A model missing from it contributes zero rather than a guess \u2014 a confident wrong number on a cost dashboard is worse than a visible gap, because someone will budget against it.\n\nThis panel is that visible gap. EMPTY IS THE HEALTHY STATE. Any row here means every cost figure on this board is an understatement, and the fix is to add the model's list price to agentPricing in demo/app/agent_types.go AND to PRICING in demo/agent-python/telemetry.py \u2014 both, or the two workers will disagree, which is what demo/agent-python/test_parity.py exists to catch.\n\nThe `unless` operator does the work: token series that have no matching cost series.",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "countRows": false,
+          "fields": ""
+        }
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "job": true,
+              "instance": true,
+              "group": true,
+              "service_namespace": true,
+              "deployment_environment": true
+            }
+          }
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Input tokens per model call",
+      "id": 20,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 41
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(gen_ai_client_token_usage_sum{service_name=~\"$service\", gen_ai_system=~\"$provider\", gen_ai_token_type=\"input\"}[$__rate_interval])) / clamp_min(sum(rate(gen_ai_client_operation_duration_seconds_count{service_name=~\"$service\", gen_ai_system=~\"$provider\", error_type=\"\"}[$__rate_interval])), 0.0001)",
+          "range": true,
+          "instant": false,
+          "refId": "A",
+          "legendFormat": "mean input tokens / call"
+        }
+      ],
+      "description": "Mean input tokens per successful model call \u2014 a proxy for prompt size.\n\nIt is the leading indicator for the cost-per-run panel at the top, and it moves for reasons that are easy to ship without noticing: a system prompt that grew, a tool schema that got more verbose, retrieved context that stopped being truncated, or an agent taking more turns (each turn re-sends the entire conversation).\n\nA step change here immediately after a deploy is the cheapest cost regression you will ever catch, because the cause is in the diff.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "short",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "axisSoftMin": 0,
+            "drawStyle": "line"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#3987e5",
+                "value": null
+              }
+            ]
+          },
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    }
+  ],
+  "preload": false,
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": [
+    "temporal",
+    "genai",
+    "agents",
+    "cost"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {},
+        "hide": 0,
+        "includeAll": false,
+        "label": "Data source",
+        "multi": false,
+        "name": "DS_PROMETHEUS",
+        "options": [],
+        "query": "prometheus",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "type": "datasource"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "definition": "label_values(gen_ai_client_token_usage_sum, service_name)",
+        "hide": 0,
+        "includeAll": true,
+        "allValue": ".*",
+        "label": "Worker",
+        "multi": true,
+        "name": "service",
+        "options": [],
+        "query": {
+          "qryType": 1,
+          "query": "label_values(gen_ai_client_token_usage_sum, service_name)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "definition": "label_values(gen_ai_client_token_usage_sum, gen_ai_system)",
+        "hide": 0,
+        "includeAll": true,
+        "allValue": ".*",
+        "label": "Provider",
+        "multi": true,
+        "name": "provider",
+        "options": [],
+        "query": {
+          "qryType": 1,
+          "query": "label_values(gen_ai_client_token_usage_sum, gen_ai_system)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "AI Agents \u2014 GenAI Observability",
+  "uid": "ai-agent-observability",
+  "version": 1,
+  "weekStart": ""
+}
