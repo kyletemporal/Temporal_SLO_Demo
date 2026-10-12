@@ -102,17 +102,104 @@ dashboards are built on. New namespace only: OTLP in, prometheus exporter on
 `:8889`, scraped as `otel-collector-genai`, with four constant labels dropped
 at scrape time.
 
+**Worker scale harness.** `scripts/scale-benchmark.sh` + `k6/09-scale-sweep.js`
+sweep the Worker count under a fixed **open-loop** offered load and write a CSV
+and a report. Board: `grafana/dashboards/custom/worker-scale.json`. Methodology
+in [`demo/docs/SCALE-TESTING.md`](demo/docs/SCALE-TESTING.md).
+
+It produced a **negative result, which is the more useful kind**: throughput did
+not scale (73.8/s → 70.1/s across a 4x fleet), slots were never the constraint
+(33 of 40 free at the worst sampled moment), k6 delivered 79.99999/s with zero
+dropped iterations — and schedule-to-start p99 *rose* from 0.44s to 2.84s as
+Workers were added. Sync match rate of 0.17–0.30 fingerprints the real
+bottleneck: persistence, on a laptop running one Postgres behind one
+all-in-one Temporal container. **An HPA on schedule-to-start would have scaled
+up in response, made it worse, and scaled up again** — which is the whole
+argument for measuring before enabling one.
+
+Three PromQL traps found while building it, all of which produced *wrong*
+numbers rather than missing ones: `temporal_activity_execution_latency_count`
+has zero live series (it is `_seconds_count`); `min_over_time()` over an
+aggregation needs `[60s:15s]` subquery syntax, and the parse error reads as a
+harmless `n/a`; and `temporal_worker_task_slots_available` counts Temporal's own
+internal Workers at 1000 slots per internal queue — it reported **8110 free
+slots for a fleet that had 40**. All three are documented in SCALE-TESTING.md §7.
+
 **`validate.sh` extended** — the two new scrape jobs, the two GenAI rule groups,
 the `gen_ai_*` metric families, and a new §10 that runs the Go↔Python contract
 parity test (6 cases: cost maths, error taxonomy, instrument names, attribute
-names). A new gate keeps it honest rather than red-by-default: `gen_ai_*`
-panels WARN instead of FAIL until an agent has run.
+names). Two new gates keep it honest rather than red-by-default: `gen_ai_*`
+panels WARN instead of FAIL until an agent has run, and container-CPU queries
+WARN because this stack deliberately runs no cAdvisor. Gated on the *query*,
+not on the panel title, so the slot-utilisation query sharing that panel still
+has to return data.
 
 **`make agent-py-test` now works without the OTel Python packages installed** —
 it falls back to running the parity test inside the langchain image, which the
 image now carries. It failed with `ModuleNotFoundError` on any host that had
 not installed them, which is most hosts, since the whole point of that image is
 that nobody has to.
+
+## Verified live 2026-09-28
+
+The agent + scale work is now verified against a running stack, not just
+statically. 14 containers up including the new `agent-worker`; `make validate`
+**46 passed, 0 failed, 1 warning**; all 11 Prometheus rule groups healthy
+(including `genai-agent-recording` 9 and `genai-agent-alerts` 6); the Go↔Python
+parity test passes **6/6 inside the langchain image**, exercising the fallback
+path added for hosts without the OTel Python packages.
+
+Panel coverage, measured after `make agent-demo` (offline mock, no API key):
+**18 of 19** queries on the AI agent board return data, and **16 of 17** on
+worker-scale. Each board has exactly one empty query and both are empty by
+design — "Unpriced models", where a row would mean cost is being
+under-reported, and the container-CPU series on "Slot utilisation vs CPU",
+which needs a cAdvisor this stack deliberately does not run.
+
+**The first live run failed 23 panels, and the dashboards were not at fault.**
+`validate.sh` resolved exactly two template variables by name — `$namespace`
+and `$task_queue` — so the moment boards arrived using other names it sent
+Prometheus queries with the dollar sign still in them. The agent board's
+`service_name=~"$service"` matched nothing and all 18 panels read as NO DATA;
+worker-scale's `[$__range:]` is not parseable PromQL and came back HTTP 400.
+Both boards were correct in Grafana the whole time. A validator that accuses
+working panels is worse than one that misses a broken one, so the resolver is
+now generic — macros plus a regex that turns any remaining `$var` in a label
+matcher into match-all, the same rule `tools/check_dashboard_queries.py`
+already used. The two are now in step, and were cross-checked against each
+other on this run.
+
+**The scale harness ran clean, and its report contradicted itself.** A
+`make scale-benchmark-quick` sweep (1, 2 Workers @ 40/s) confirmed the three
+PromQL fixes work live — `activities_s=105.24` and `min_slots=3` where the
+buggy version produced `n/a` and `8110`. But the generated report then said
+*"an autoscaler would make this worse"* and, four lines later,
+*"schedule-to-start is the right metric to autoscale on for this workload"*.
+The two narrative branches keyed on different columns and never consulted each
+other. Fixed: the schedule-to-start branch now reads the throughput verdict
+first, and the falling-S2S-without-rising-throughput case gets its own text
+explaining why that pattern is the one an HPA handles worst. Both branches
+re-verified, the second against a synthetic CSV.
+
+The run itself is a good teaching case and is now written up in
+SCALE-TESTING.md: the second Worker halved queue wait (0.289s → 0.171s) and
+lifted sync match from 0.39 to 0.62 while moving throughput by 0.1/s. Better
+at picking work *up*, no better at getting work *done*.
+
+**`tools/check_dashboard_queries.py` was calling a healthy panel a bug.** It
+sends every query to Prometheus, so the golden-signals board's one Loki panel
+came back HTTP 400 and was printed under "these are bugs, not idle panels" —
+the same class of error as the validator above, in the opposite direction. It
+now skips non-Prometheus targets and reports the count. With that and the
+resolver fix, the two checkers agree on every board, cross-checked on this run.
+
+Also worth knowing, because it cost a diagnosis: **`shardinfo_immediate_queue_lag`
+and `shardinfo_scheduled_queue_lag` do not exist until the history service has
+completed a shard-info update cycle.** On a freshly started stack the "Shard
+queue lag p95" panel on Full Overview reads as broken; ~10 minutes later the
+same query returns 51 and 40 series. The server was emitting them on
+`/metrics` before Prometheus had them, which is what ruled out a scrape-config
+drop.
 
 ## In flight
 

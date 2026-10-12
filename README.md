@@ -142,6 +142,30 @@ Docs: [`demo/docs/AI-AGENT-OBSERVABILITY.md`](demo/docs/AI-AGENT-OBSERVABILITY.m
 
 ---
 
+## Worker scale testing
+
+How much throughput does one more Worker actually buy you? A rising
+schedule-to-start has two causes that look identical on the dashboard — too few
+Workers, or each Worker too small — and the difference decides whether an
+autoscaler helps or makes it worse.
+
+```bash
+make scale-benchmark         # sweep worker counts under fixed load → CSV + report
+make scale-benchmark-quick   # faster, shape only
+```
+
+On this stack it produced a **negative** result, which is the more useful kind:
+throughput did not scale (73.8/s → 70.1/s across a 4x fleet), slots were never
+the constraint (33 of 40 free at the worst moment), and schedule-to-start p99
+*rose* from 0.44s to 2.84s as Workers were added. An HPA on schedule-to-start
+would have scaled up in response, made it worse, and scaled up again.
+
+Methodology, the capacity arithmetic, and the three PromQL traps that made the
+first run produce wrong numbers rather than missing ones:
+[`demo/docs/SCALE-TESTING.md`](demo/docs/SCALE-TESTING.md).
+
+---
+
 ## Why this exists
 
 Temporal is durable, so it does not drop work — it *queues* it. Which means a
@@ -172,6 +196,7 @@ result. A few that changed the numbers:
 Docs: [`demo/docs/SLO-GUIDE.md`](demo/docs/SLO-GUIDE.md) ·
 [`demo/docs/CHAOS-RUNBOOK.md`](demo/docs/CHAOS-RUNBOOK.md) ·
 [`demo/docs/AI-AGENT-OBSERVABILITY.md`](demo/docs/AI-AGENT-OBSERVABILITY.md) ·
+[`demo/docs/SCALE-TESTING.md`](demo/docs/SCALE-TESTING.md) ·
 [`demo/docs/NEXUS.md`](demo/docs/NEXUS.md) ·
 [`production/docs/SERVERLESS-WORKERS.md`](production/docs/SERVERLESS-WORKERS.md)
 

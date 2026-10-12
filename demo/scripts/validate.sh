@@ -338,6 +338,13 @@ for path in sorted(glob.glob("grafana/dashboards/*/*.json")):
                 print(f"    \033[33m ----\033[0m  {title[:58]}  (empty by design: {EXPECTED_EMPTY[title.lower()]})")
             elif st == "EMPTY" and "gen_ai_" in e and not HAS_AGENT:
                 print(f"    \033[33m WARN\033[0m  {title[:58]}  no data (no agent has run)")
+            elif st == "EMPTY" and "container_cpu_usage_seconds_total" in e:
+                # Container CPU needs cAdvisor, which this stack deliberately
+                # does not run. Gated on the QUERY rather than allowlisted on
+                # the panel title, because the panels that use it also carry a
+                # slot-utilisation query that MUST return data — allowlisting
+                # the title would hide that one going dark.
+                print(f"    \033[33m WARN\033[0m  {title[:58]}  container CPU needs cAdvisor (not on this stack)")
             elif st == "EMPTY" and not HAS_TRAFFIC:
                 print(f"    \033[33m WARN\033[0m  {title[:58]}  no data (no traffic yet)")
             elif st == "EMPTY":
