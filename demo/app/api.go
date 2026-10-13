@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"go.temporal.io/sdk/client"
-	"go.temporal.io/sdk/interceptor"
 	sdktally "go.temporal.io/sdk/contrib/tally"
+	"go.temporal.io/sdk/interceptor"
 )
 
 type startRequest struct {
@@ -21,6 +21,21 @@ type startRequest struct {
 	// Wait blocks until the Workflow completes. Off by default so k6 can
 	// generate backlog faster than Workers can drain it.
 	Wait bool `json:"wait"`
+}
+
+type agentRequest struct {
+	AgentInput
+	TaskQueue string `json:"taskQueue"`
+	RunID     string `json:"runId"`
+	Wait      bool   `json:"wait"`
+}
+
+type agentResponse struct {
+	WorkflowID string       `json:"workflowId"`
+	RunID      string       `json:"runId"`
+	TaskQueue  string       `json:"taskQueue"`
+	Result     *AgentResult `json:"result,omitempty"`
+	Error      string       `json:"error,omitempty"`
 }
 
 type startResponse struct {
@@ -140,6 +155,83 @@ func runAPI() {
 				return
 			}
 			resp.Result = result
+		}
+
+		writeJSON(w, http.StatusAccepted, resp)
+	})
+
+	// -------------------------------------------------------------------------
+	// Agent runs
+	//
+	// A separate task queue from /orders, which is the point rather than an
+	// implementation detail. Agent Activities block on a third-party API for
+	// seconds at a time while order Activities finish in milliseconds; sharing a
+	// queue means a burst of agent traffic holds every slot and starves order
+	// processing, and the resulting schedule-to-start spike would appear on the
+	// ORDER queue with nothing in the order path to explain it.
+	//
+	// Separate queues also make the two independently scalable, which is what
+	// the scale benchmark in scripts/scale-benchmark.sh measures.
+	// -------------------------------------------------------------------------
+	agentQueue := env("AGENT_TASK_QUEUE", defaultAgentTaskQueue)
+
+	mux.HandleFunc("/agent", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+			return
+		}
+
+		var req agentRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if req.Prompt == "" {
+			req.Prompt = "Where is order order-42 and what will it cost to ship to Bristol?"
+		}
+
+		queue := req.TaskQueue
+		if queue == "" {
+			queue = agentQueue
+		}
+		id := req.RunID
+		if id == "" {
+			id = fmt.Sprintf("%d", time.Now().UnixNano())
+		}
+
+		opts := client.StartWorkflowOptions{
+			ID:        agentWorkflowIDPrefix + id,
+			TaskQueue: queue,
+			// Generous but finite. An agent that loops is the expensive failure
+			// mode here, and unlike a stuck order Workflow it is spending money
+			// the whole time it is invisible — so unlike /orders this endpoint
+			// keeps a cap even for the chaos path.
+			WorkflowExecutionTimeout: 30 * time.Minute,
+		}
+
+		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+		defer cancel()
+
+		run, err := c.ExecuteWorkflow(ctx, opts, AgentWorkflow, req.AgentInput)
+		if err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, agentResponse{Error: err.Error()})
+			return
+		}
+
+		resp := agentResponse{
+			WorkflowID: run.GetID(),
+			RunID:      run.GetRunID(),
+			TaskQueue:  queue,
+		}
+
+		if req.Wait {
+			var result AgentResult
+			if err := run.Get(ctx, &result); err != nil {
+				resp.Error = err.Error()
+				writeJSON(w, http.StatusOK, resp)
+				return
+			}
+			resp.Result = &result
 		}
 
 		writeJSON(w, http.StatusAccepted, resp)

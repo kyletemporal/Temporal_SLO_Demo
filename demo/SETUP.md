@@ -417,6 +417,36 @@ Two very different causes, and telling them apart is the point of the demo:
   `temporal-sdk-worker` target as down. The metrics exporter is not wired up in
   application code.
 
+### "Shard queue lag p95" is empty on a freshly started stack
+
+Not broken — too early. `shardinfo_immediate_queue_lag` and
+`shardinfo_scheduled_queue_lag` are emitted by the history service when it
+completes a **shard-info update cycle**, not at startup. Measured on this
+stack: zero series a few minutes after `make up`, then 51 and 40 series about
+ten minutes later, with no configuration change in between.
+
+If it is still empty after ~15 minutes, check the server endpoint directly
+before suspecting the scrape config — that is what separates "not emitted yet"
+from "dropped on the way in":
+
+```bash
+docker exec tobs-prometheus wget -qO- http://temporal:8000/metrics \
+  | grep -c shardinfo_immediate_queue_lag_bucket
+```
+
+Non-zero there and zero in Prometheus means a scrape problem. Zero in both
+means the server has not emitted them yet.
+
+### The AI agent board is a full page of "No data"
+
+Expected on a fresh stack: `gen_ai_*` series **do not exist** until an agent
+has run, because OTel creates an instrument on first record. Run
+`make agent-demo` — 20 runs against the offline mock, no API key, no egress —
+wait ~15s for the collector's export interval, and the board fills.
+
+`make validate` knows the difference: with no agent runs those panels WARN
+rather than FAIL, and say so.
+
 ### Grafana logs errors about `provisioning/plugins` and `provisioning/alerting`
 
 ```

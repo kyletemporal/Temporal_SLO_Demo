@@ -256,3 +256,83 @@ chaos-poller-flood: ## [8] Poller flood — healthy fleet, collapsing poll succe
 .PHONY: chaos-poller-flood-reset
 chaos-poller-flood-reset: ## REQUIRED cleanup for [8] — back to 1 Worker
 	bash scripts/chaos-poller-flood-reset.sh
+
+# -----------------------------------------------------------------------------
+# AI agents
+#
+# Everything here runs against the OFFLINE MOCK provider by default: no API key,
+# no egress, no spend. That is deliberate — an observability lab whose headline
+# dashboard needs a funded account is a lab most people never see working.
+#
+# To drive a real provider, set ANTHROPIC_API_KEY or OPENAI_API_KEY in .env and
+# pass PROVIDER=anthropic (or openai).
+# -----------------------------------------------------------------------------
+.PHONY: agent
+agent: ## Run one agent execution and print the result. PROVIDER=anthropic|openai|mock
+	@curl -s -X POST localhost:8081/agent \
+		-H 'content-type: application/json' \
+		-d '{"prompt":"$(or $(PROMPT),Where is order order-42 and what will it cost to ship to Bristol?)","provider":"$(or $(PROVIDER),mock)","wait":true}' \
+		| python3 -m json.tool
+
+.PHONY: agent-demo
+agent-demo: ## Populate every panel on the AI agent board (~20 runs, mock provider)
+	@bash scripts/agent-demo.sh $(or $(RUNS),20) $(or $(PROVIDER),mock)
+
+.PHONY: agent-runaway
+agent-runaway: ## The runaway agent: loops to the cap, spends money, NO alert fires
+	@echo "==> starting 5 agents that never converge"
+	@for i in 1 2 3 4 5; do \
+		curl -s -X POST localhost:8081/agent -H 'content-type: application/json' \
+			-d "{\"prompt\":\"runaway $$i\",\"provider\":\"$(or $(PROVIDER),mock)\",\"loopForever\":true,\"maxIterations\":$(or $(MAX_ITER),8)}" >/dev/null; \
+	done
+	@echo "==> watch the AI agent board:"
+	@echo "    Loop depth p99         climbs to the cap"
+	@echo "    Run outcomes           max_iterations, NOT error"
+	@echo "    Spend rate             rises"
+	@echo "    Every Temporal panel   unchanged — the Workflows SUCCEEDED"
+
+.PHONY: agent-langchain
+agent-langchain: ## Start the LangChain (Python) worker — needs an API key, large image
+	@if [ -z "$$ANTHROPIC_API_KEY" ] && [ -z "$$OPENAI_API_KEY" ]; then \
+		echo "ERROR: set ANTHROPIC_API_KEY or OPENAI_API_KEY in demo/.env first."; \
+		echo "       The LangChain worker has no offline mock — unlike the Go agent,"; \
+		echo "       it would crash-loop without one and look like a broken stack."; \
+		exit 1; \
+	fi
+	docker compose --profile langchain up -d --build agent-worker-langchain
+	@echo "==> polling task queue 'agents-langchain'"
+	@echo "    Its gen_ai_* series are IDENTICAL in name to the Go worker's."
+	@echo "    Split them on the AI agent board with the Worker picker."
+
+.PHONY: agent-py-test
+agent-py-test: ## Verify the Python worker agrees with the Go worker (cost, taxonomy, names)
+	@# Host first, image second. The OTel Python packages are NOT a prerequisite
+	@# of this demo — the langchain worker is optional and behind a profile — so
+	@# a bare `python3 test_parity.py` fails with ModuleNotFoundError on a
+	@# perfectly good machine. Falling back to the image keeps the check
+	@# runnable everywhere, at the cost of building it once.
+	@if python3 -c "import opentelemetry.exporter.otlp.proto.grpc.metric_exporter" 2>/dev/null; then \
+		cd agent-python && python3 test_parity.py; \
+	else \
+		echo "==> OTel Python packages not on this host — running in the image"; \
+		docker compose --profile langchain run --rm --no-deps \
+			--entrypoint python agent-worker-langchain test_parity.py; \
+	fi
+
+.PHONY: agent-test
+agent-test: ## Go unit tests: cost maths, error taxonomy, loop termination
+	@cd app && go test ./... 2>&1 | tail -20
+
+# -----------------------------------------------------------------------------
+# Dashboards
+# -----------------------------------------------------------------------------
+.PHONY: dashboards-generate
+dashboards-generate: ## Regenerate every generated dashboard from tools/
+	@cd .. && for g in tools/generate_*.py; do python3 "$$g"; done
+	@echo "==> restart Grafana to reload: docker compose restart grafana"
+
+.PHONY: dashboards-check
+dashboards-check: ## Run every dashboard query against live Prometheus, report empties
+	@cd .. && for d in demo/grafana/dashboards/custom/*.json demo/grafana/dashboards/slo/*.json; do \
+		python3 tools/check_dashboard_queries.py "$$d" || true; echo; \
+	done

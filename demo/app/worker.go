@@ -25,6 +25,24 @@ func runWorker() {
 	}
 	defer func() { _ = shutdownTracing(ctx) }()
 
+	// Agent metrics ride the same OTLP endpoint as traces and fail open the same
+	// way. Started here rather than only on the agent Worker because a Worker
+	// registers every Workflow in the binary; which ones it actually runs is
+	// decided by TASK_QUEUE, not by what is compiled in.
+	// OTEL_SERVICE_NAME rather than a literal.
+	//
+	// Measured: with a hardcoded name, the order Worker and the agent Worker
+	// both reported service_name="temporal-worker" on their gen_ai series and
+	// were indistinguishable in Prometheus. temporal_task_queue told them apart
+	// by luck, not by design. The env var is the standard OTel knob and compose
+	// sets it per service.
+	shutdownAgentMetrics, err := initAgentMetrics(ctx, env("OTEL_SERVICE_NAME", "temporal-worker"))
+	if err != nil {
+		log.Printf("WARN  agent metrics setup failed, continuing without them: %v", err)
+		shutdownAgentMetrics = func(context.Context) error { return nil }
+	}
+	defer func() { _ = shutdownAgentMetrics(ctx) }()
+
 	stopProfiling := initProfiling("temporal-worker")
 	startPprofServer("0.0.0.0:" + env("PPROF_PORT", "6060"))
 	defer stopProfiling()
@@ -66,6 +84,16 @@ func runWorker() {
 	w.RegisterActivity(ValidateOrder)
 	w.RegisterActivity(ChargePayment)
 	w.RegisterActivity(ShipOrder)
+
+	// The agent Workflow is registered on every Worker, but only the Worker
+	// polling AGENT_TASK_QUEUE will ever be handed one. Registering it
+	// everywhere costs nothing and avoids the failure where a Worker is scaled
+	// onto the agent queue and rejects tasks for a Workflow type it was built
+	// with but never registered.
+	w.RegisterWorkflow(AgentWorkflow)
+	w.RegisterActivity(InvokeModel)
+	w.RegisterActivity(RunAgentTool)
+	w.RegisterActivity(ReportAgentRun)
 
 	log.Printf("worker polling task queue %q (activity slots=%d, workflow task slots=%d)",
 		taskQueue, maxActivities, maxWorkflowTasks)

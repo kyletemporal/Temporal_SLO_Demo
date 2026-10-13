@@ -1,0 +1,228 @@
+# GenAI agent recording rules and alerts.
+#
+# Kept out of alerts.yml because the questions are different in kind. Everything
+# in alerts.yml asks whether the PLATFORM is healthy. These ask whether the
+# AGENTS are behaving and what they cost — and the two have almost no overlap,
+# because the ways an agent fleet goes wrong are mostly not errors:
+#
+#   - it loops without converging   (nothing fails, spend rises linearly)
+#   - it gets more expensive        (every RED signal stays flat)
+#   - it stops calling a tool       (answers get worse, no signal moves at all)
+#
+# None of those trip an error-rate alert, which is the entire reason this file
+# exists.
+#
+# SERIES NAMES WERE READ OFF A RUNNING COLLECTOR, NOT DERIVED. The OTel
+# Prometheus exporter drops annotation units — anything in braces — so the token
+# histogram is `gen_ai_client_token_usage` with NO unit suffix, while duration,
+# whose unit is `s`, becomes `..._duration_seconds`. Writing the name you would
+# expect from the pattern gives you a rule that never fires and never errors.
+#
+# EVERY THRESHOLD BELOW IS A PLACEHOLDER. Agent cost and loop depth are entirely
+# workload-specific: an $8/hour fleet is either a rounding error or a crisis
+# depending on whose it is. Tune against two weeks of your own baseline before
+# promoting any of these to a paging severity. See RECOMMENDATIONS.md for how
+# the rest of this repo's thresholds were chosen.
+
+groups:
+  # ---------------------------------------------------------------------------
+  # Recording rules
+  #
+  # These exist because the raw expressions are long enough that people write
+  # them wrong. The cached-token subtraction in particular is easy to invert,
+  # and inverting it overstates cost by ~10x on exactly the workloads that
+  # optimised hardest — see the unit tests in demo/app/agent_test.go.
+  # ---------------------------------------------------------------------------
+  - name: genai-agent-recording
+    interval: 30s
+    rules:
+      - record: genai:cost_usd:rate5m
+        expr: sum by (service_name, gen_ai_system, gen_ai_response_model) (
+                rate(gen_ai_client_cost_total[5m])
+              )
+
+      - record: genai:cost_usd_per_hour:rate5m
+        expr: sum(genai:cost_usd:rate5m) * 3600
+
+      # Input + output ONLY. `reasoning` is a subset of output and `cached` a
+      # subset of input; including all four double-counts. This is the single
+      # most common mistake made against this metric.
+      - record: genai:tokens:rate5m
+        expr: sum by (service_name, gen_ai_system, gen_ai_token_type) (
+                rate(gen_ai_client_token_usage_sum[5m])
+              )
+
+      - record: genai:billable_tokens:rate5m
+        expr: sum(genai:tokens:rate5m{gen_ai_token_type=~"input|output"})
+
+      # The biggest lever on spend. Cached input bills at roughly a tenth of the
+      # normal rate, so this ratio moving from 0 to 0.8 cuts input cost ~72%.
+      - record: genai:cache_hit_ratio:rate5m
+        expr: |
+          sum(genai:tokens:rate5m{gen_ai_token_type="cached"})
+          /
+          clamp_min(sum(genai:tokens:rate5m{gen_ai_token_type="input"}), 0.0001)
+
+      - record: genai:runs:rate5m
+        expr: sum by (service_name, outcome) (rate(gen_ai_agent_runs_total[5m]))
+
+      # The number that survives a change in traffic. Total spend rising with
+      # volume is expected; cost per run rising is a regression.
+      - record: genai:cost_per_run:rate5m
+        expr: |
+          sum(genai:cost_usd:rate5m)
+          /
+          clamp_min(sum(genai:runs:rate5m), 0.0001)
+
+      - record: genai:loop_depth_p95:rate5m
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le, service_name) (rate(gen_ai_agent_loop_iterations_bucket[5m]))
+          )
+
+      - record: genai:llm_errors:rate5m
+        expr: sum by (service_name, gen_ai_system, error_type) (
+                rate(gen_ai_client_operation_duration_seconds_count{error_type!=""}[5m])
+              )
+
+  # ---------------------------------------------------------------------------
+  # Alerts
+  # ---------------------------------------------------------------------------
+  - name: genai-agent-alerts
+    rules:
+      # THE ONE THAT JUSTIFIES THE WHOLE FILE.
+      #
+      # A run that ends at max_iterations is, to Temporal, a SUCCESS: the
+      # Workflow returned, it did not throw, no Activity failed, nothing
+      # retried. It also answered nothing and spent the full token budget
+      # getting there. No alert built on workflow_failed or on an error rate
+      # will ever see it.
+      - alert: GenAIAgentRunawayLoops
+        expr: |
+          sum(rate(gen_ai_agent_runs_total{outcome="max_iterations"}[10m]))
+          /
+          clamp_min(sum(rate(gen_ai_agent_runs_total[10m])), 0.0001)
+          > 0.1
+        for: 15m
+        labels:
+          severity: warning
+          component: genai-agent
+        annotations:
+          summary: "More than 10% of agent runs are hitting the iteration cap"
+          description: >-
+            These runs cost full price and produced no final answer. Two usual causes:
+            the cap is too low for the task, or a tool started returning something the
+            model cannot use and it is looping trying to work around it. Check the
+            tool-call panel for a rise in bad_arguments or unknown_tool before raising
+            MaxIterations — raising the cap on a genuine tool problem just makes each
+            failure more expensive.
+
+      # Deliberately on the RATE, not on a cumulative total.
+      #
+      # A monthly-budget alert fires once the money is already spent. This fires
+      # while it is being spent, which is the only point at which anyone can
+      # act. Set the threshold from your own baseline: the placeholder is
+      # laptop-scale and will be wrong for you in one direction or the other.
+      - alert: GenAISpendRateHigh
+        expr: genai:cost_usd_per_hour:rate5m > 10
+        for: 10m
+        labels:
+          severity: warning
+          component: genai-agent
+        annotations:
+          summary: "Estimated agent spend above $10/hour"
+          description: >-
+            List-price estimate, not an invoice. Check whether volume rose (expected)
+            or cost-per-run rose (a regression). If cost-per-run moved without a traffic
+            change, look at cache hit ratio and mean input tokens per call first —
+            a prompt-prefix change that disabled caching roughly triples input cost
+            while breaking nothing.
+
+      # Silent, and the reason it is silent is worth understanding: prompt
+      # caching is a PREFIX match, so a timestamp, UUID or per-user string
+      # interpolated near the front of a prompt invalidates everything after it.
+      # Nothing errors, nothing slows down, the bill roughly triples.
+      - alert: GenAICacheHitRatioCollapsed
+        expr: |
+          genai:cache_hit_ratio:rate5m < 0.1
+          and
+          genai:billable_tokens:rate5m > 50
+        for: 20m
+        labels:
+          severity: info
+          component: genai-agent
+        annotations:
+          summary: "Prompt cache hit ratio below 10% on a busy fleet"
+          description: >-
+            Almost certainly a prompt-prefix change rather than a provider problem.
+            Look for anything volatile that moved to the top of the system prompt:
+            a timestamp, a request ID, a user name, a re-ordered tool list. The second
+            condition stops this firing on an idle fleet, where the ratio is noise.
+        # severity: info rather than warning on purpose. This is a COST finding,
+        # not an availability one — nothing is broken and nobody should be woken
+        # up. It belongs in a morning review, and giving it a paging severity is
+        # how cost alerts get muted permanently.
+
+      - alert: GenAIProviderErrorsHigh
+        expr: |
+          sum(genai:llm_errors:rate5m{error_type!~"refusal"})
+          /
+          clamp_min(sum(rate(gen_ai_client_operation_duration_seconds_count[5m])), 0.0001)
+          > 0.05
+        for: 10m
+        labels:
+          severity: warning
+          component: genai-agent
+        annotations:
+          summary: "More than 5% of model calls are failing ({{ $labels.gen_ai_system }})"
+          description: >-
+            Check the error taxonomy panel. rate_limit and overloaded are provider-side
+            and resolve on their own; auth and bad_request will not, and are marked
+            NonRetryable so they fail fast rather than burning three attempts.
+
+        # refusal is EXCLUDED from the ratio above, deliberately.
+        #
+        # A refusal is a content decision, not a fault: the provider worked
+        # correctly and declined. Counting it as an availability error means a
+        # single badly-worded prompt template can page someone at 3am for a
+        # system that is functioning exactly as designed. It gets its own rule,
+        # at info, below.
+
+      - alert: GenAIRefusalsElevated
+        expr: |
+          sum(genai:llm_errors:rate5m{error_type="refusal"})
+          /
+          clamp_min(sum(rate(gen_ai_client_operation_duration_seconds_count[5m])), 0.0001)
+          > 0.02
+        for: 15m
+        labels:
+          severity: info
+          component: genai-agent
+        annotations:
+          summary: "More than 2% of model calls are being refused"
+          description: >-
+            Not an outage — the provider declined on content grounds. Retrying the same
+            prompt will be refused again, which is why refusal is NonRetryable. Either
+            the prompt template needs changing, or a server-side fallback to a second
+            model should be configured. Investigate the prompt, not the provider.
+
+      # An agent that stops calling tools is a silent CAPABILITY regression:
+      # answers get worse, users notice, and no technical signal moves. Usually
+      # caused by a prompt edit that weakened the instruction to use a tool, or
+      # a tool description that stopped matching what the model is asked to do.
+      - alert: GenAIToolUsageStopped
+        expr: |
+          sum(rate(gen_ai_agent_tool_calls_total[15m])) == 0
+          and
+          sum(rate(gen_ai_agent_runs_total[15m])) > 0
+        for: 20m
+        labels:
+          severity: warning
+          component: genai-agent
+        annotations:
+          summary: "Agents are running but calling no tools at all"
+          description: >-
+            Agent runs are completing without a single tool invocation. Compare the
+            system prompt and the registered tool list against the last known-good
+            deploy. The second condition is what makes this meaningful — without it
+            the rule fires on any idle fleet.

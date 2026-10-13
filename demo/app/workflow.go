@@ -1,10 +1,10 @@
 package main
 
 import (
-	"os"
 	"context"
 	"fmt"
 	"math/rand"
+	"os"
 	"time"
 
 	"go.temporal.io/sdk/temporal"

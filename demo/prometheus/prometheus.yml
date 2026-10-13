@@ -12,6 +12,10 @@ rule_files:
   # "is something broken right now", slo-rules.yml is "are we still meeting
   # what we promised, and how much room is left".
   - /etc/prometheus/slo-rules.yml
+  # GenAI agent recording rules and alerts. Separate file because the questions
+  # are different in kind: everything else here asks whether the platform is
+  # healthy, this asks whether the agents are behaving and what they cost.
+  - /etc/prometheus/agent-rules.yml
 
 scrape_configs:
   # ---------------------------------------------------------------------------
@@ -66,6 +70,69 @@ scrape_configs:
         replacement: sdk-metrics
       - target_label: role
         replacement: worker
+
+  # ---------------------------------------------------------------------------
+  # Temporal SDK metrics — agent Worker fleet
+  #
+  # Same dns_sd pattern as the order Workers, separate job so the two fleets can
+  # be compared side by side. `role` is what the scale dashboard splits on:
+  # agent Workers and order Workers have completely different healthy slot
+  # utilisation, and a single blended figure would hide both.
+  # ---------------------------------------------------------------------------
+  - job_name: temporal-sdk-agent-worker
+    metrics_path: /metrics
+    dns_sd_configs:
+      - names: ["agent-worker"]
+        type: A
+        port: 8077
+        refresh_interval: 10s
+    relabel_configs:
+      - target_label: group
+        replacement: sdk-metrics
+      - target_label: role
+        replacement: agent-worker
+
+  # ---------------------------------------------------------------------------
+  # GenAI agent metrics, via the OTel Collector
+  #
+  # These are the gen_ai_* series emitted by the agent Workers — Go and Python,
+  # Anthropic / OpenAI / LangChain / mock. They arrive OTLP at the collector and
+  # are re-exposed here for scraping.
+  #
+  # A worker therefore appears as TWO scrape targets: temporal-sdk-worker for
+  # its Tally-based Temporal series, and this job for its OTel-based agent
+  # series. That looks redundant and is not — see the note at the top of
+  # demo/app/agent_telemetry.go. The short version: the two exporters emit
+  # DIFFERENT NAMES for the same Temporal metrics, so consolidating on OTel
+  # would rename every series the existing rules and dashboards are built on.
+  #
+  # Consequence worth knowing before debugging: `up` for THIS job says whether
+  # the collector is reachable, not whether any agent is running. An agent
+  # Worker that has crashed leaves this target up and its series flat. The
+  # temporal-sdk-worker job is what tells you a Worker went away.
+  # ---------------------------------------------------------------------------
+  - job_name: otel-collector-genai
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["otel-collector:8889"]
+        labels:
+          group: genai-metrics
+    # Trim labels that resource_to_telemetry_conversion adds to EVERY series.
+    #
+    # Measured on a single agent run: telemetry_sdk_name, telemetry_sdk_version,
+    # telemetry_sdk_language and service_version appeared on all 14 gen_ai
+    # series and none of them varies — four constant labels per series, paid for
+    # on every sample, forever.
+    #
+    # exported_job goes too. It is Prometheus's rename of the collector's own
+    # `job` label after it collided with this scrape job's; it duplicates
+    # service_name and only ever confuses whoever is reading the label set.
+    #
+    # service_name, deployment_environment and temporal_task_queue are KEPT —
+    # those genuinely vary and every panel splits on them.
+    metric_relabel_configs:
+      - regex: "telemetry_sdk_name|telemetry_sdk_version|telemetry_sdk_language|service_version|exported_job"
+        action: labeldrop
 
   - job_name: prometheus
     static_configs:
