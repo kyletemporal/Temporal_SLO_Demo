@@ -26,19 +26,25 @@ EOF
 read -r answer
 [ "$answer" = "$name" ] || { echo "aborted"; exit 1; }
 
-aws eks update-kubeconfig --region "$region" --name "$name" >/dev/null
+# Re-runnable: if a previous teardown already removed the cluster, skip
+# straight to Terraform rather than failing on kubeconfig.
+if aws eks describe-cluster --region "$region" --name "$name" >/dev/null 2>&1; then
+  aws eks update-kubeconfig --region "$region" --name "$name" >/dev/null
 
-echo "==> uninstalling Helm releases"
-helm -n temporal uninstall temporal --wait 2>/dev/null || true
-helm -n monitoring uninstall monitoring --wait 2>/dev/null || true
+  echo "==> uninstalling Helm releases"
+  helm -n temporal uninstall temporal --wait 2>/dev/null || true
+  helm -n monitoring uninstall monitoring --wait 2>/dev/null || true
 
-echo "==> deleting namespaces (releases PVC-backed EBS volumes)"
-kubectl delete namespace temporal monitoring --ignore-not-found --wait=true --timeout=10m
+  echo "==> deleting namespaces (releases PVC-backed EBS volumes)"
+  kubectl delete namespace temporal monitoring --ignore-not-found --wait=true --timeout=10m
 
-left="$(kubectl get pv -o name 2>/dev/null | wc -l | tr -d ' ')"
-if [ "$left" != 0 ]; then
-  echo "WARNING: $left PersistentVolume(s) still exist; their EBS volumes may outlive the cluster:"
-  kubectl get pv
+  left="$(kubectl get pv -o name 2>/dev/null | wc -l | tr -d ' ')"
+  if [ "$left" != 0 ]; then
+    echo "WARNING: $left PersistentVolume(s) still exist; their EBS volumes may outlive the cluster:"
+    kubectl get pv
+  fi
+else
+  echo "==> cluster $name not found; skipping Kubernetes cleanup"
 fi
 
 echo "==> disabling RDS deletion protection"

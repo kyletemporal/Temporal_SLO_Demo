@@ -49,6 +49,56 @@ Tear down — in this order, which the script enforces:
 ../scripts/teardown.sh
 ```
 
+### From AWS CloudShell
+
+You don't need anything installed locally. Open CloudShell in the target
+region and run:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/kyletemporal/Temporal_SLO_Demo/main/aws/eks-selfhosted/scripts/cloudshell.sh
+bash cloudshell.sh up
+```
+
+`up` does the following:
+1. Installs pinned, checksum-verified Terraform, Helm and kubectl into
+   `~/.local/bin`.
+2. Shallow-clones this repo.
+3. Creates a versioned, encrypted, private S3 bucket for Terraform state.
+4. Runs `terraform apply`, which shows the plan and asks before changing
+   anything.
+5. Runs `deploy.sh` and then `smoke-test.sh`.
+
+Other commands:
+
+| | |
+|---|---|
+| `bash cloudshell.sh deploy` | Re-run only the Helm layer |
+| `bash cloudshell.sh smoke` | End-to-end smoke test |
+| `bash cloudshell.sh status` | Pods and releases |
+| `bash cloudshell.sh connect` | Refresh kubeconfig and this session's IP on the allowlist |
+| `bash cloudshell.sh down` | Tear it all down (asks for confirmation) |
+
+Four CloudShell constraints shape the script:
+
+- **Idle sessions end after ~20 minutes, and EKS takes about that long to
+  create.** Keep the tab active. If the session drops anyway, open a new one
+  and run the same command. State is in S3 with locking, so the apply resumes
+  where it stopped.
+- **`$HOME` is capped at 1 GB.** Terraform's working directory is about 880 MB
+  (measured), so it goes in `/tmp` and is re-initialised each session. The
+  tools and the repo use about 285 MB of home.
+- **The public IP changes every session.** Every command adds the current
+  session's /32 to the EKS API allowlist before touching the cluster. To use
+  kubectl from your laptop as well, add
+  `EXTRA_ADMIN_CIDRS=<laptop-ip>/32`. CloudShell can't open the UI or
+  Grafana, so port-forward from the laptop.
+- **Your console identity becomes cluster admin.** It also needs permission
+  to create VPC, EKS, RDS, IAM, Secrets Manager and S3 resources.
+
+Until this branch is merged, the script falls back to the `eks-selfhosted`
+branch automatically. Fetch the script from that branch too:
+`.../Temporal_SLO_Demo/eks-selfhosted/aws/eks-selfhosted/scripts/cloudshell.sh`.
+
 ---
 
 ## Design decisions
@@ -224,7 +274,12 @@ you delete it:
 
   The kind run used smaller replicas and resource requests so that it fit on
   one node. Every other value was the same file.
-- **Scripts:** shellcheck is clean.
+- **Scripts:** shellcheck is clean. `cloudshell.sh` was run in an
+  `amazonlinux:2023` linux/amd64 container (CloudShell's base). In that run,
+  tool install and checksum checks, the repo clone (including the
+  unmerged-branch fallback), tfvars and backend generation, and
+  `terraform init`/`validate`/`test` all ran. The S3, STS and EKS calls did
+  not.
 
 **What has not run** (it needs an AWS account):
 
