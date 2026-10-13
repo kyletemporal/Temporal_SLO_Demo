@@ -1,0 +1,43 @@
+# One ServiceMonitor for all four server roles, in place of the chart's four.
+#
+# It exists because of the `namespace` label. Prometheus Operator attaches the
+# Kubernetes namespace to every target as `namespace`. Temporal's server
+# metrics carry their OWN `namespace` label — the Temporal Namespace. Left
+# alone, the target label wins and Temporal's is renamed `exported_namespace`,
+# so every rule in production/prometheus that groups or filters by namespace
+# sees "temporal" (the Kubernetes namespace) on every series: no error, one
+# wrong answer everywhere. The chart's ServiceMonitor template cannot fix this.
+#
+# The fix moves the Kubernetes value to `k8s_namespace` and drops it from
+# `namespace` before the scrape, so `namespace` on a stored series is only
+# ever Temporal's — present where the server set it, absent where it did not.
+# honorLabels is belt-and-braces for the same collision.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: temporal-server
+  namespace: temporal
+  labels:
+    app.kubernetes.io/name: temporal
+    app.kubernetes.io/part-of: temporal-selfhosted
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: temporal
+      app.kubernetes.io/headless: "true"
+  namespaceSelector:
+    matchNames: [temporal]
+  # job="frontend" / "history" / ... — readable in `up`. The production rules
+  # do not depend on it; they key on service_name, which the server sets.
+  jobLabel: app.kubernetes.io/component
+  endpoints:
+    - port: metrics
+      interval: 15s
+      honorLabels: true
+      relabelings:
+        - sourceLabels: [namespace]
+          targetLabel: k8s_namespace
+        - action: labeldrop
+          regex: namespace
+        - targetLabel: group
+          replacement: server-metrics

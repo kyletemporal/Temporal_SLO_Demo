@@ -22,6 +22,8 @@ app-team/configured/
 *.tfstate.*
 *.tfplan
 crash.log
+# Written by aws/eks-selfhosted/scripts/cloudshell.sh to add an S3 backend.
+**/cloudshell_override.tf
 
 # Secrets. See SECURITY.md D3 and P3.
 #
