@@ -1,0 +1,4 @@
+workers,offered_rate,throughput_wf_s,activities_s,sched_to_start_p95_s,sched_to_start_p99_s,min_slots_available,sync_match_rate,poll_success_rate,cpu_per_worker
+1,80,73.82,199.18,0.2030,0.4406,2,0.1667,0.9977,n/a
+2,80,70.18,177.79,0.1739,0.3292,12,0.2280,0.9974,n/a
+4,80,70.12,211.91,0.2905,2.8411,33,0.2983,0.9981,n/a

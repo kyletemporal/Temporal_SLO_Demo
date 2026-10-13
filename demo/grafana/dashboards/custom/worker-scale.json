@@ -1,0 +1,1044 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "links": [
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "tags": [],
+      "targetBlank": false,
+      "title": "Golden signals",
+      "tooltip": "RED + saturation",
+      "type": "link",
+      "url": "/d/temporal-golden-signals"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "tags": [],
+      "targetBlank": false,
+      "title": "AI agents",
+      "tooltip": "GenAI cost and behaviour",
+      "type": "link",
+      "url": "/d/ai-agent-observability"
+    }
+  ],
+  "panels": [
+    {
+      "type": "text",
+      "title": "",
+      "id": 1,
+      "transparent": true,
+      "gridPos": {
+        "h": 5,
+        "w": 3,
+        "x": 0,
+        "y": 0
+      },
+      "options": {
+        "mode": "html",
+        "code": {
+          "language": "plaintext",
+          "showLineNumbers": false,
+          "showMiniMap": false
+        },
+        "content": "<div style=\"background:#444CE7;border-radius:3px;\n  height:100%;display:flex;flex-direction:column;align-items:center;\n  justify-content:center;padding:0.6em;text-align:center;color:#fff;\">\n  <div style=\"font-size:15px;font-weight:700;letter-spacing:.02em;\">Scale</div>\n  <div style=\"font-size:11px;opacity:.85;margin-top:2px;\">capacity &amp; slots</div>\n</div>"
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Workers polling",
+      "id": 2,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 3,
+        "y": 0
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "count(up{job=~\"$role\"} == 1)",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "description": "Worker processes Prometheus is currently scraping.\n\nDiscovered by dns_sd against the Compose service name, so it tracks `--scale` automatically. A static target would pin to whichever replica DNS resolved first and silently under-report the fleet \u2014 which is the kind of gap that makes a dashboard lie during an incident.\n\nIf this disagrees with what you scaled to, dns_sd has not refreshed yet (10s) or a container failed to start. Every per-worker figure on this board divides by THIS number, not by what you asked for.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#d03b3b",
+                "value": null
+              },
+              {
+                "color": "#0ca30c",
+                "value": 1
+              }
+            ]
+          },
+          "decimals": 0,
+          "noValue": "none"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "auto",
+        "justifyMode": "auto",
+        "wideLayout": true
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Throughput",
+      "id": 3,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 7,
+        "y": 0
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(workflow_success{namespace=~\"$namespace\", namespace!~\"temporal_system|system|_unknown_\"}[$__rate_interval]))",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "description": "Successful Workflow completions per second \u2014 what the fleet is ACHIEVING.\n\nCompare against offered load. A persistent gap between the two is backlog being built, and the backlog is where the diagnosis lives.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "reqps",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#3987e5",
+                "value": null
+              }
+            ]
+          },
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "auto",
+        "justifyMode": "auto",
+        "wideLayout": true
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Throughput per worker",
+      "id": 4,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 11,
+        "y": 0
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(workflow_success{namespace=~\"$namespace\", namespace!~\"temporal_system|system|_unknown_\"}[$__rate_interval])) / clamp_min(count(up{job=~\"$role\"} == 1), 1)",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "description": "Completions per second divided by the number of Workers actually scraped.\n\nTHE NUMBER THAT TELLS YOU WHETHER ANOTHER WORKER IS WORTH BUYING. Watch it across a scale change: if it holds steady as you add Workers, the fleet is scaling linearly and horizontal scaling is the right lever. If it FALLS, each added Worker is buying less than the last and you are near the knee \u2014 the bottleneck has moved somewhere else (per-Worker concurrency, the server, or the load generator).\n\nscripts/scale-benchmark.sh measures exactly this across fleet sizes and reports it as an efficiency ratio.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "reqps",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#199e70",
+                "value": null
+              }
+            ]
+          },
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "auto",
+        "justifyMode": "auto",
+        "wideLayout": true
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Min activity slots free",
+      "id": 5,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 15,
+        "y": 0
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "min_over_time(sum(temporal_worker_task_slots_available{worker_type=\"ActivityWorker\", job=~\"$role\"})[$__range:])",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "description": "The LOWEST number of free activity slots anywhere in the fleet over the window.\n\nThe minimum, not the mean, and that is the entire point of this panel. Slot exhaustion is a transient \u2014 a fleet that hits zero for two seconds in every ten is losing throughput and has a perfectly healthy average.\n\nZERO means slot-bound: there was a moment with no capacity to accept a task anywhere. Raise MAX_CONCURRENT_ACTIVITIES before adding Workers; this is the branch of the RECOMMENDATIONS.md \u00a74 tree that more Workers do not fix.\n\nA HIGH value with high schedule-to-start is the opposite finding \u2014 slots are free and tasks are still waiting, so the constraint is elsewhere.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#d03b3b",
+                "value": null
+              },
+              {
+                "color": "#ec835a",
+                "value": 1
+              },
+              {
+                "color": "#0ca30c",
+                "value": 5
+              }
+            ]
+          },
+          "decimals": 0,
+          "noValue": "no workers"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "auto",
+        "justifyMode": "auto",
+        "wideLayout": true
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Schedule-to-start p95",
+      "id": 6,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 5,
+        "x": 19,
+        "y": 0
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(temporal_activity_schedule_to_start_latency_seconds_bucket{namespace=~\"$namespace\", namespace!~\"temporal_system|system|_unknown_\"}[$__rate_interval])))",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "description": "How long an activity task waits for a poller.\n\nTHE SATURATION SIGNAL, and the right thing to autoscale on \u2014 it measures the queue, not the host, so it rises for a fleet that is too small regardless of why. `aws/k8s/worker/hpa.yaml` scales on this rather than on CPU for exactly that reason: an IO-blocked agent Worker at 100% slot utilisation shows almost no CPU, so a CPU-based autoscaler never fires.\n\nThe _seconds suffix is Go/Java SDK. TypeScript, Python and .NET emit MILLISECONDS with no suffix \u2014 see `make verify-sdk-labels`.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#0ca30c",
+                "value": null
+              },
+              {
+                "color": "#ec835a",
+                "value": 0.5
+              },
+              {
+                "color": "#d03b3b",
+                "value": 2
+              }
+            ]
+          },
+          "decimals": 3,
+          "noValue": "no tasks"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "auto",
+        "justifyMode": "auto",
+        "wideLayout": true
+      }
+    },
+    {
+      "type": "row",
+      "title": "A \u00b7 Is the fleet keeping up?",
+      "collapsed": false,
+      "id": 7,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 5
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Offered load vs throughput",
+      "id": 8,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 6
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "(sum(rate(workflow_success{namespace=~\"$namespace\", namespace!~\"temporal_system|system|_unknown_\"}[$__rate_interval])) or vector(0)) + (sum(rate(workflow_failed{namespace=~\"$namespace\", namespace!~\"temporal_system|system|_unknown_\"}[$__rate_interval])) or vector(0)) + (sum(rate(workflow_timeout{namespace=~\"$namespace\", namespace!~\"temporal_system|system|_unknown_\"}[$__rate_interval])) or vector(0))",
+          "range": true,
+          "instant": false,
+          "refId": "A",
+          "legendFormat": "terminated (all outcomes)"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(workflow_success{namespace=~\"$namespace\", namespace!~\"temporal_system|system|_unknown_\"}[$__rate_interval]))",
+          "range": true,
+          "instant": false,
+          "refId": "B",
+          "legendFormat": "succeeded"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(temporal_workflow_failed_total{namespace=~\"$namespace\", namespace!~\"temporal_system|system|_unknown_\"}[$__rate_interval]))",
+          "range": true,
+          "instant": false,
+          "refId": "C",
+          "legendFormat": "SDK-observed failures"
+        }
+      ],
+      "description": "Work finishing, split by outcome. The gap between the top line and the offered rate is backlog being built.\n\nTHE THREE TERMINAL COUNTERS ARE workflow_success, workflow_failed AND workflow_timeout \u2014 verified against this cluster, not assumed.\n\nEACH TERM IS GUARDED WITH `or vector(0)`, and that is load-bearing rather than defensive. Three drafts of this panel failed, each differently, and all three were caught by tools/check_dashboard_queries.py:\n\n  1. `workflow_completed` \u2014 does not exist on this server. Empty, no error.\n  2. `a + b + c` unguarded \u2014 returns EMPTY, not a partial sum, the moment any one operand has no samples. On a healthy cluster workflow_timeout has none, so the panel went dark precisely BECAUSE nothing was timing out.\n  3. `sum(rate({__name__=~\"a|b|c\"}))` \u2014 the obvious fix, and it does not work at all: rate() strips __name__, so the three metrics collapse to identical labelsets and Prometheus fails with 'vector cannot contain metrics with the same labelset'. No aggregation can rescue it, because the collision happens before any aggregation runs.\n\nSame family as `count()` over an empty vector returning no data rather than zero, which is documented on the SLO board and fixed the same way.\n\nThere is also no server-side 'workflows started' counter, so arrivals cannot be plotted directly \u2014 these terminal counters lag arrivals by the execution duration. Adequate for a sustained rate, useless for spotting a burst. For the exact offered rate read it off the k6 run, which is why scale-benchmark.sh records it as its own column rather than inferring it.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "reqps",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "axisSoftMin": 0,
+            "drawStyle": "line"
+          },
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "mean"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Schedule-to-start distribution",
+      "id": 9,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 6
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(temporal_activity_schedule_to_start_latency_seconds_bucket{namespace=~\"$namespace\", namespace!~\"temporal_system|system|_unknown_\"}[$__rate_interval])))",
+          "range": true,
+          "instant": false,
+          "refId": "A",
+          "legendFormat": "p50"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(temporal_activity_schedule_to_start_latency_seconds_bucket{namespace=~\"$namespace\", namespace!~\"temporal_system|system|_unknown_\"}[$__rate_interval])))",
+          "range": true,
+          "instant": false,
+          "refId": "B",
+          "legendFormat": "p95"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(temporal_activity_schedule_to_start_latency_seconds_bucket{namespace=~\"$namespace\", namespace!~\"temporal_system|system|_unknown_\"}[$__rate_interval])))",
+          "range": true,
+          "instant": false,
+          "refId": "C",
+          "legendFormat": "p99"
+        }
+      ],
+      "description": "Queue wait at three quantiles.\n\nThe SHAPE matters more than any single value. p50 near zero with a high p99 is a fleet that is mostly fine and occasionally starved \u2014 usually a burst arriving faster than the pollers pick up, which more Workers fix. All three rising together is sustained under-capacity.\n\nIF THIS LINE IS FLAT AND HIGH, suspect ScheduleToStartTimeout is set: it TRUNCATES this histogram at the timeout value, so a badly backed-up queue reports a flat ceiling instead of a rising line. The demo Workflow deliberately leaves it unset \u2014 see the comment in demo/app/workflow.go.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "s",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "axisSoftMin": 0,
+            "drawStyle": "line"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#0ca30c",
+                "value": null
+              },
+              {
+                "color": "#ec835a",
+                "value": 0.5
+              },
+              {
+                "color": "#d03b3b",
+                "value": 2
+              }
+            ]
+          },
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "B \u00b7 Slot-bound, worker-bound, or server-bound?",
+      "collapsed": false,
+      "id": 10,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 14
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Activity slots available per worker",
+      "id": 11,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 15
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "min_over_time(sum by (instance) (temporal_worker_task_slots_available{worker_type=\"ActivityWorker\", job=~\"$role\"})[$__interval:])",
+          "range": true,
+          "instant": false,
+          "refId": "A",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "description": "Free activity slots, per Worker process, as a per-interval MINIMUM.\n\nSplit by instance rather than summed because the distribution is the finding. All Workers near zero together is genuine fleet-wide saturation. ONE Worker at zero while others sit idle is a very different problem \u2014 usually uneven task routing, a sticky cache imbalance, or one host that is slower than the rest \u2014 and adding Workers does not fix it.\n\nAny line touching zero means that Worker had no free slot and was refusing work. A fleet-wide floor at zero is the slot-bound diagnosis.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "short",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "axisSoftMin": 0,
+            "drawStyle": "line"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#d03b3b",
+                "value": null
+              },
+              {
+                "color": "#ec835a",
+                "value": 1
+              },
+              {
+                "color": "#0ca30c",
+                "value": 5
+              }
+            ]
+          },
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "min",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Sync match rate and poll success",
+      "id": 12,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 15
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(poll_success_sync[$__rate_interval])) / clamp_min(sum(rate(poll_success[$__rate_interval])), 0.0001)",
+          "range": true,
+          "instant": false,
+          "refId": "A",
+          "legendFormat": "sync match rate"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(poll_success[$__rate_interval])) / clamp_min(sum(rate(poll_success[$__rate_interval])) + sum(rate(poll_timeouts[$__rate_interval])), 0.0001)",
+          "range": true,
+          "instant": false,
+          "refId": "B",
+          "legendFormat": "poll success rate"
+        }
+      ],
+      "description": "Two server-side rates that move in OPPOSITE directions as the fleet grows, which is what makes them useful together.\n\nSYNC MATCH RATE \u2014 the share of tasks handed straight to a waiting poller without a persistence round trip. Falls when the fleet is too small: tasks arrive with nobody waiting, so they get written to the queue and read back.\n\nPOLL SUCCESS RATE \u2014 the share of long-polls that returned a task rather than timing out. Falls when the fleet is too LARGE: pollers outnumber tasks and most polls come back empty.\n\nSO: sync match low + poll success high = under-provisioned. Sync match at 1.0 + poll success collapsing = over-provisioned, which is measured in scenario 8 (poller flood: poll success 0.9995 \u2192 0.6812 while sync match IMPROVED to 1.0000). Both at once is the sweet spot, and the reason TemporalMatchingStarved requires schedule-to-start as a second condition \u2014 poll success alone fires on a healthy over-provisioned cluster.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "percentunit",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "axisSoftMin": 0,
+            "drawStyle": "line"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#d03b3b",
+                "value": null
+              },
+              {
+                "color": "#ec835a",
+                "value": 0.8
+              },
+              {
+                "color": "#0ca30c",
+                "value": 0.95
+              }
+            ]
+          },
+          "decimals": 4,
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "min"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "C \u00b7 Agent fleets \u2014 why CPU autoscaling fails here",
+      "collapsed": false,
+      "id": 13,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 23
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Activity execution latency by type",
+      "id": 14,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 24
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (le, activity_type) (rate(temporal_activity_execution_latency_seconds_bucket{namespace=~\"$namespace\", namespace!~\"temporal_system|system|_unknown_\"}[$__rate_interval])))",
+          "range": true,
+          "instant": false,
+          "refId": "A",
+          "legendFormat": "{{activity_type}} p95"
+        }
+      ],
+      "description": "How long each Activity type takes to execute, p95.\n\nThis is the number that sets how many slots a Worker needs. One slot sustains roughly 1/latency activities per second, so:\n\n  50ms activity   \u2192 ~20/sec per slot  \u2192 10 slots \u2248 200/sec\n  5s LLM call     \u2192 ~0.2/sec per slot \u2192 10 slots \u2248 2/sec\n\nA hundred-fold difference in required concurrency for the same throughput. That is why the agent Worker is configured with 50 slots against the order Worker's 10, and why a single default across both fleets is wrong for one of them.\n\nInvokeModel appearing here at seconds while ChargePayment sits at milliseconds is the whole argument for separate task queues.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "s",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "axisSoftMin": 0,
+            "drawStyle": "line"
+          },
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Slot utilisation vs CPU \u2014 the autoscaling trap",
+      "id": 15,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 24
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "1 - (sum(temporal_worker_task_slots_available{worker_type=\"ActivityWorker\", job=~\"$role\"}) / clamp_min(sum(max_over_time(temporal_worker_task_slots_available{worker_type=\"ActivityWorker\", job=~\"$role\"}[$__range:])), 1))",
+          "range": true,
+          "instant": false,
+          "refId": "A",
+          "legendFormat": "slot utilisation (approx)"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "avg(rate(container_cpu_usage_seconds_total{name=~\".*worker.*\"}[$__rate_interval]))",
+          "range": true,
+          "instant": false,
+          "refId": "B",
+          "legendFormat": "cpu cores per worker"
+        }
+      ],
+      "description": "Slot utilisation beside CPU, to show that the two DISAGREE for an IO-bound fleet \u2014 which is the reason to autoscale on schedule-to-start rather than CPU.\n\nAn agent Worker spends nearly all its time blocked on a provider's HTTP response. It can sit at 100% slots busy \u2014 completely unable to accept another task \u2014 while showing a few percent CPU. A CPU-based autoscaler sees an idle fleet and never scales; the queue backs up and schedule-to-start climbs with nothing on a CPU chart to explain it.\n\nSLOT UTILISATION HERE IS AN APPROXIMATION and honest about it: the SDK exports slots AVAILABLE, not slots CONFIGURED, so the denominator is inferred from the high-water mark over the window. That is only correct if the fleet was idle at some point in it \u2014 on a permanently busy fleet this READS LOW. The authoritative figure is MAX_CONCURRENT_ACTIVITIES, which the app knows and the metric does not.\n\nThe CPU line needs cAdvisor and is absent on this stack by default. A missing line is the honest rendering; a fabricated zero would read as 'idle' and argue for exactly the wrong conclusion.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "percentunit",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "axisSoftMin": 0,
+            "drawStyle": "line"
+          },
+          "decimals": 3,
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    }
+  ],
+  "preload": false,
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": [
+    "temporal",
+    "capacity",
+    "scale",
+    "workers"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {},
+        "hide": 0,
+        "includeAll": false,
+        "label": "Data source",
+        "multi": false,
+        "name": "DS_PROMETHEUS",
+        "options": [],
+        "query": "prometheus",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "type": "datasource"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": [
+            "temporal-sdk-worker"
+          ],
+          "value": [
+            "temporal-sdk-worker"
+          ]
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "definition": "label_values(up{job=~\"temporal-sdk.*\"}, job)",
+        "hide": 0,
+        "includeAll": true,
+        "allValue": "temporal-sdk.*",
+        "label": "Fleet",
+        "multi": true,
+        "name": "role",
+        "options": [],
+        "query": {
+          "qryType": 1,
+          "query": "label_values(up{job=~\"temporal-sdk.*\"}, job)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "definition": "label_values(workflow_success, namespace)",
+        "hide": 0,
+        "includeAll": true,
+        "allValue": ".*",
+        "label": "Namespace",
+        "multi": true,
+        "name": "namespace",
+        "options": [],
+        "query": {
+          "qryType": 1,
+          "query": "label_values(workflow_success, namespace)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-30m",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Workers \u2014 Scale & Capacity",
+  "uid": "temporal-worker-scale",
+  "version": 1,
+  "weekStart": ""
+}

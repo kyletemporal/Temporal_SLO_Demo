@@ -324,8 +324,16 @@ agent-test: ## Go unit tests: cost maths, error taxonomy, loop termination
 	@cd app && go test ./... 2>&1 | tail -20
 
 # -----------------------------------------------------------------------------
-# Dashboards
+# Scale and capacity
 # -----------------------------------------------------------------------------
+.PHONY: scale-benchmark
+scale-benchmark: ## Sweep worker counts under fixed load, write a CSV + report
+	@bash scripts/scale-benchmark.sh
+
+.PHONY: scale-benchmark-quick
+scale-benchmark-quick: ## Faster sweep (1,2 workers @ 2m) — shape only, not a real measurement
+	@WORKERS="1 2" DURATION=2m WARMUP=60 bash scripts/scale-benchmark.sh
+
 .PHONY: dashboards-generate
 dashboards-generate: ## Regenerate every generated dashboard from tools/
 	@cd .. && for g in tools/generate_*.py; do python3 "$$g"; done
