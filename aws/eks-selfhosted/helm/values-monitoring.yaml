@@ -1,0 +1,82 @@
+# kube-prometheus-stack 92.3.1 — Prometheus, Alertmanager, Grafana,
+# node-exporter and kube-state-metrics.
+#
+# Installed as its own release, separate from Temporal, so either can be
+# upgraded or torn down without the other. scripts/deploy.sh loads the
+# production/ rules and dashboards into it unchanged; that is the point of the
+# exercise — those files claim to work against a real per-role cluster, and
+# this is where that claim gets tested.
+
+prometheus:
+  prometheusSpec:
+    # Pick up ServiceMonitors and PrometheusRules from every namespace and
+    # without the chart's release label. The default selectors only match
+    # objects labelled `release: <this release>`, which means the Temporal
+    # ServiceMonitor is silently ignored and every panel reads "No data".
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+
+    retention: 15d
+    retentionSize: 40GB
+    scrapeInterval: 15s
+    evaluationInterval: 30s
+
+    # Appears on every alert. deploy.sh overrides it with the cluster name.
+    externalLabels:
+      cluster: temporal-selfhosted
+
+    resources:
+      requests: { cpu: 500m, memory: 2Gi }
+      limits: { memory: 4Gi }
+
+    # STORAGE_CLASS in deploy.sh: gp3 on EKS (created by deploy.sh), the
+    # cluster default elsewhere.
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          accessModes: [ReadWriteOnce]
+          resources:
+            requests:
+              storage: 50Gi
+
+alertmanager:
+  # Runs, routes nowhere. production/README.md: run recording-only for two
+  # weeks before any of this pages anyone.
+  alertmanagerSpec:
+    resources:
+      requests: { cpu: 50m, memory: 64Mi }
+
+grafana:
+  # Credentials in a Secret deploy.sh generates; never the chart's default.
+  admin:
+    existingSecret: grafana-admin
+    userKey: admin-user
+    passwordKey: admin-password
+  service:
+    type: ClusterIP
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      labelValue: "1"
+      searchNamespace: ALL
+      folderAnnotation: grafana_folder
+      provider:
+        foldersFromFilesStructure: true
+    datasources:
+      # The production dashboards template on a datasource variable named
+      # DS_PROMETHEUS; the chart's default datasource satisfies it.
+      defaultDatasourceEnabled: true
+
+# The kube-prometheus-stack defaults for these are right for EKS. On the
+# managed control plane the scheduler, controller-manager and etcd are not
+# scrapeable, so their targets would sit permanently down.
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeEtcd:
+  enabled: false
+kubeProxy:
+  enabled: false

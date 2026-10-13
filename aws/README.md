@@ -2,13 +2,15 @@
 
 Two pieces a platform team hits in week one: getting Workflow history out of
 Temporal's retention window, and running Workers on EKS so they scale on the
-right signal.
+right signal. And, for teams that run the server themselves, a self-hosted
+Temporal Service on EKS.
 
 | | |
 |---|---|
 | [`terraform/export-sink`](terraform/export-sink) | S3 bucket, IAM role and the Temporal Cloud export sink |
 | [`k8s/worker`](k8s/worker) | Worker Deployment, IRSA service account, PDB, and **two** autoscaling options — KEDA (`scaledobject.yaml`) or a plain HPA (`hpa.yaml`) |
 | [`k8s/karpenter`](k8s/karpenter) | NodePool + EC2NodeClass provisioning the nodes underneath the fleet |
+| [`eks-selfhosted`](eks-selfhosted) | **Self-hosted Temporal Server 1.28 on EKS** — VPC, EKS and RDS PostgreSQL in Terraform, then the Temporal chart and the `production/` monitoring bundle via Helm. Verified end to end on kind; not yet applied to AWS |
 
 ## Verification status
 

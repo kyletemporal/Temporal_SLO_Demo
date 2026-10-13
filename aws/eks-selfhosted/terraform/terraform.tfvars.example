@@ -1,0 +1,20 @@
+# Copy to terraform.tfvars and edit. terraform.tfvars is gitignored.
+
+name   = "temporal-selfhosted"
+region = "us-east-1"
+
+# REQUIRED. Who may reach the EKS API endpoint. Your VPN or office egress /32.
+admin_cidrs = ["203.0.113.10/32"]
+
+# Match the environment being reproduced where it matters. Instance class and
+# Multi-AZ change failure behaviour, not just speed.
+# db_instance_class = "db.m7g.large"
+# db_multi_az       = false
+
+# node_instance_types = ["m7i.xlarge"]
+# node_count          = 3
+
+tags = {
+  owner   = "REPLACE_ME"
+  purpose = "temporal-selfhosted-test"
+}

@@ -1,0 +1,217 @@
+# Temporal Server 1.28 on EKS, persistence and visibility on RDS PostgreSQL.
+#
+# Chart: temporalio/temporal 0.67.0 — the newest chart release whose appVersion
+# is 1.28 (1.28.1). Images are pinned one patch later, to 1.28.4. Do NOT pair
+# 1.28 images with a 1.3x chart: the chart renders the server config file, and
+# a config template written for a newer server can carry keys an older one
+# rejects or silently ignores.
+#
+# Values that differ per environment are NOT in this file. scripts/deploy.sh
+# passes them with --set:
+#   server.config.persistence.{default,visibility}.sql.host / tls.serverName
+#   server.config.numHistoryShards
+#
+# Everything else here is a decision, and the comments say why.
+
+# A dedicated ServiceAccount rather than the namespace default, so IAM can be
+# attached through Pod Identity later (archival to S3 needs it) without
+# granting it to everything else in the namespace.
+serviceAccount:
+  create: true
+
+server:
+  image:
+    repository: temporalio/server
+    tag: 1.28.4
+
+  config:
+    logLevel: "info"
+
+    # PLACEHOLDER — set by deploy.sh from NUM_HISTORY_SHARDS (default 512).
+    #
+    # The one setting that can never change after first start. Temporal's
+    # guidance: 512 for small production clusters; large clusters rarely exceed
+    # 4096; the right number comes from load testing, not from a table. Too few
+    # and shard-lock contention caps throughput no matter how many history pods
+    # run; too many and every shard's queues cost CPU, memory and DB polling.
+    #
+    # If this environment exists to reproduce someone else's cluster, use THEIR
+    # value. Shard count changes how load spreads over history pods, so a repro
+    # at a different count is a different system.
+    numHistoryShards: 512
+
+    persistence:
+      defaultStore: default
+      default:
+        driver: sql
+        sql:
+          driver: postgres12
+          host: PLACEHOLDER-set-by-deploy-sh
+          port: 5432
+          database: temporal
+          user: temporal
+          existingSecret: temporal-db
+          # Per history/matching/frontend/worker POD. 9 server pods x 20 = 180
+          # connections at most for this store; db.m7g.large allows ~800.
+          maxConns: 20
+          maxIdleConns: 20
+          maxConnLifetime: "1h"
+          tls:
+            enabled: true
+            caFile: /etc/temporal/rds-ca/global-bundle.pem
+            enableHostVerification: true
+            serverName: PLACEHOLDER-set-by-deploy-sh
+      visibility:
+        driver: sql
+        sql:
+          driver: postgres12
+          host: PLACEHOLDER-set-by-deploy-sh
+          port: 5432
+          database: temporal_visibility
+          user: temporal
+          existingSecret: temporal-db
+          maxConns: 10
+          maxIdleConns: 10
+          maxConnLifetime: "1h"
+          tls:
+            enabled: true
+            caFile: /etc/temporal/rds-ca/global-bundle.pem
+            enableHostVerification: true
+            serverName: PLACEHOLDER-set-by-deploy-sh
+
+    # Namespaces are created by deploy.sh once the frontend is serving, not by
+    # the chart: the chart's namespace step runs inside the schema Job, before
+    # any server pod exists, and succeeds only by retrying until one does.
+    namespaces:
+      create: false
+
+  # The RDS CA bundle, from a ConfigMap deploy.sh creates. Mounted on every
+  # server pod and (via admintools below) on the schema Jobs.
+  additionalVolumes:
+    - name: rds-ca
+      configMap:
+        name: rds-ca
+  additionalVolumeMounts:
+    - name: rds-ca
+      mountPath: /etc/temporal/rds-ca
+      readOnly: true
+
+  metrics:
+    annotations:
+      enabled: false
+    # Scraped by OUR ServiceMonitor (servicemonitor.yaml), not the chart's: the
+    # chart's cannot set honorLabels, and without it Prometheus renames
+    # Temporal's own `namespace` label to `exported_namespace` — which silently
+    # breaks every per-namespace rule in production/prometheus.
+    serviceMonitor:
+      enabled: false
+    prometheus:
+      timerType: histogram
+
+  # Per-role sizing. Requests are what the scheduler reserves; they are set
+  # from Temporal's scaling guidance (history is the CPU- and memory-heavy
+  # role, matching next) and are a starting point, not a measurement of this
+  # cluster. Limits are memory-only: a CPU limit on a latency-sensitive Go
+  # server throttles it in exactly the bursts that matter.
+  frontend:
+    replicaCount: 2
+    resources:
+      requests: { cpu: 500m, memory: 512Mi }
+      limits: { memory: 1Gi }
+    podDisruptionBudget: { maxUnavailable: 1 }
+    topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: topology.kubernetes.io/zone
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: temporal
+            app.kubernetes.io/component: frontend
+
+  history:
+    replicaCount: 3
+    resources:
+      requests: { cpu: "1", memory: 2Gi }
+      limits: { memory: 4Gi }
+    podDisruptionBudget: { maxUnavailable: 1 }
+    topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: topology.kubernetes.io/zone
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: temporal
+            app.kubernetes.io/component: history
+
+  matching:
+    replicaCount: 2
+    resources:
+      requests: { cpu: 500m, memory: 1Gi }
+      limits: { memory: 2Gi }
+    podDisruptionBudget: { maxUnavailable: 1 }
+    topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: topology.kubernetes.io/zone
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: temporal
+            app.kubernetes.io/component: matching
+
+  worker:
+    replicaCount: 2
+    resources:
+      requests: { cpu: 250m, memory: 512Mi }
+      limits: { memory: 1Gi }
+    podDisruptionBudget: { maxUnavailable: 1 }
+
+admintools:
+  image:
+    repository: temporalio/admin-tools
+    tag: 1.28.4-tctl-1.18.4-cli-1.6.2
+  additionalVolumes:
+    - name: rds-ca
+      configMap:
+        name: rds-ca
+  additionalVolumeMounts:
+    - name: rds-ca
+      mountPath: /etc/temporal/rds-ca
+      readOnly: true
+
+web:
+  enabled: true
+  replicaCount: 1
+  # ClusterIP only. Reach it with
+  #   kubectl -n temporal port-forward svc/temporal-web 8080:8080
+  # The UI has no authentication unless you configure OIDC, so do not put it
+  # behind a public load balancer.
+  service:
+    type: ClusterIP
+
+schema:
+  # deploy.sh creates both databases, owned by the least-privilege `temporal`
+  # role, using the RDS master credential once. The chart's create step would
+  # need that role to hold CREATEDB, which it should not.
+  createDatabase:
+    enabled: false
+  setup:
+    enabled: true
+  update:
+    enabled: true
+
+# Bundled dependencies the chart enables by default. All off: persistence and
+# visibility are RDS, and monitoring is kube-prometheus-stack
+# (values-monitoring.yaml), installed separately so it can be upgraded without
+# touching Temporal.
+cassandra:
+  enabled: false
+elasticsearch:
+  enabled: false
+mysql:
+  enabled: false
+postgresql:
+  enabled: false
+prometheus:
+  enabled: false
+grafana:
+  enabled: false
