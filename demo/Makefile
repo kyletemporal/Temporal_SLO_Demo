@@ -344,3 +344,19 @@ dashboards-check: ## Run every dashboard query against live Prometheus, report e
 	@cd .. && for d in demo/grafana/dashboards/custom/*.json demo/grafana/dashboards/slo/*.json; do \
 		python3 tools/check_dashboard_queries.py "$$d" || true; echo; \
 	done
+
+# -----------------------------------------------------------------------------
+# Worker tuning lab — live UI over real Workers (see lab/README.md)
+# -----------------------------------------------------------------------------
+.PHONY: lab
+lab: ## Start the Worker tuning lab UI at http://localhost:8095 (Go + Python Workers)
+	docker compose --profile lab up -d --build lab-controller lab-worker-go lab-worker-python
+	@echo "==> Worker tuning lab: http://localhost:8095  (starts idle — press Start load)"
+
+.PHONY: lab-down
+lab-down: ## Stop the tuning lab and terminate any lab Workflows still running
+	-docker compose --profile lab stop lab-controller lab-worker-go lab-worker-python
+	@docker exec tobs-temporal sh -c 'export TEMPORAL_ADDRESS=$$(hostname -i | cut -d" " -f1):7233; \
+	  temporal workflow terminate --namespace default \
+	    --query "TaskQueue=\"lab-go\" OR TaskQueue=\"lab-python\"" \
+	    --reason "make lab-down" --yes' 2>/dev/null || true

@@ -1,0 +1,539 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Temporal Worker Tuning Lab</title>
+<style>
+  :root {
+    --bg: #0e1116; --panel: #161b22; --panel2: #1c232d; --line: #2a3340;
+    --text: #e6edf3; --muted: #8b98a8; --wf: #5b9cff; --act: #f5a742;
+    --cpu: #ff6b6b; --io: #b48cff; --cache: #3ddc97; --warn: #ffcc4d; --ok: #3ddc97;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.45 system-ui, -apple-system, Segoe UI, sans-serif; }
+  header { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: baseline;
+           padding: 16px 20px; border-bottom: 1px solid var(--line); }
+  header h1 { margin: 0; font-size: 18px; font-weight: 650; }
+  header .sub { color: var(--muted); font-size: 13px; }
+  header .right { margin-left: auto; display: flex; gap: 10px; align-items: center; }
+  .pill { font: 12px var(--mono); padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+  .pill.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, transparent); }
+  .pill.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, transparent); }
+  main { padding: 16px 20px 40px; display: grid; gap: 20px; }
+  .lane { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .lane-head { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; padding: 12px 16px;
+               border-bottom: 1px solid var(--line); background: var(--panel2); }
+  .lane-head h2 { margin: 0; font-size: 15px; }
+  .lane-head .grow { flex: 1; }
+  button, select, input { font: inherit; color: var(--text); background: #0f141a; border: 1px solid var(--line);
+                          border-radius: 6px; padding: 5px 10px; }
+  button { cursor: pointer; }
+  button.primary { background: #1f6feb; border-color: #1f6feb; }
+  button.stop { background: #5a1d1d; border-color: #8a2b2b; }
+  .scene { width: 100%; display: block; }
+  .scene text { font-family: var(--mono); fill: var(--text); }
+  .scene .muted { fill: var(--muted); }
+  .diag { margin: 0 16px 12px; padding: 10px 12px; border-left: 3px solid var(--warn);
+          background: color-mix(in srgb, var(--warn) 8%, transparent); border-radius: 0 6px 6px 0; }
+  .diag.ok { border-color: var(--ok); background: color-mix(in srgb, var(--ok) 8%, transparent); }
+  .diag p { margin: 2px 0; }
+  .diag .tag { font: 11px var(--mono); color: var(--muted); }
+  .expect { margin: 0 16px 12px; color: var(--muted); font-size: 13px; }
+  .meters { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; padding: 0 16px 14px; }
+  .meter { background: #0f141a; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+  .meter .k { color: var(--muted); font-size: 12px; }
+  .meter .v { font: 600 18px var(--mono); }
+  .bar { height: 6px; background: #222b36; border-radius: 3px; margin-top: 6px; overflow: hidden; }
+  .bar > i { display: block; height: 100%; width: 0; transition: width .4s; }
+  .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; padding: 0 16px 14px; }
+  .chart { background: #0f141a; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px 4px; }
+  .chart .t { font-size: 12px; color: var(--muted); display: flex; justify-content: space-between; gap: 8px; }
+  .chart canvas { width: 100%; height: 110px; display: block; }
+  .legend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin: 0 4px 0 8px; }
+  details.controls { border-top: 1px solid var(--line); }
+  details.controls > summary { cursor: pointer; padding: 10px 16px; color: var(--muted); }
+  .groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; padding: 0 16px 16px; }
+  fieldset { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px 10px; margin: 0; }
+  legend { color: var(--muted); font-size: 12px; padding: 0 4px; }
+  .ctl { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; align-items: center; margin: 6px 0; }
+  .ctl label { font-size: 13px; }
+  .ctl .val { font: 13px var(--mono); text-align: right; min-width: 56px; }
+  .ctl input[type=range] { grid-column: 1 / -1; width: 100%; padding: 0; accent-color: #5b9cff; }
+  .mode { font: 10px var(--mono); padding: 0 5px; border-radius: 4px; margin-left: 6px; border: 1px solid var(--line); color: var(--muted); }
+  .mode.swap { color: var(--act); } .mode.restart { color: var(--cpu); } .mode.live { color: var(--ok); } .mode.next { color: var(--wf); }
+  .workers { padding: 0 16px 12px; color: var(--muted); font: 12px var(--mono); }
+  footer { color: var(--muted); font-size: 12px; padding: 0 20px 30px; }
+  a { color: var(--wf); }
+  @media (max-width: 700px) { header .right { margin-left: 0; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Temporal Worker Tuning Lab</h1>
+  <span class="sub">Real Workers on a real Temporal Service. Every number below is measured — SDK metrics from the Workers, queue depth from the server.</span>
+  <div class="right">
+    <label class="sub">Show
+      <select id="show"><option value="both">both lanes</option><option value="go">Go</option><option value="python">Python</option></select>
+    </label>
+    <span id="conn" class="pill">connecting…</span>
+  </div>
+</header>
+<main id="lanes"></main>
+<footer>
+  Bottleneck presets are named after the ones in
+  <a href="https://github.com/cvilenio/temporal-worker-tuning-simulator" target="_blank" rel="noopener">temporal-worker-tuning-simulator</a>:
+  predict the outcome there, then watch the real SDK and server do it here. Diagnosis lines are heuristics over real measurements.
+  Grafana shows the same Go Workers under <code>task_queue="lab-go"</code>.
+</footer>
+
+<template id="lane-tpl">
+  <section class="lane">
+    <div class="lane-head">
+      <h2 class="title"></h2>
+      <span class="pill status"></span>
+      <span class="grow"></span>
+      <select class="preset"></select>
+      <button class="burst" title="Start 50 Workflows at once">+50 burst</button>
+      <button class="toggle primary">Start</button>
+    </div>
+    <svg class="scene" viewBox="0 0 1100 320" role="img"></svg>
+    <p class="expect"></p>
+    <div class="diag"></div>
+    <div class="meters"></div>
+    <div class="charts"></div>
+    <div class="workers"></div>
+    <details class="controls">
+      <summary>Worker options, workload and Activity profile</summary>
+      <div class="groups"></div>
+    </details>
+  </section>
+</template>
+
+<script>
+"use strict";
+const LANES = ["go", "python"];
+const HIST = 300; // seconds of chart history
+const state = { snap: null, series: {}, presets: [], views: {} };
+const $ = (sel, el = document) => el.querySelector(sel);
+const fmt = (v, d = 1) => (v == null || isNaN(v)) ? "–" : Number(v).toFixed(d);
+const ms = s => s >= 1 ? fmt(s, 2) + "s" : fmt(s * 1000, 0) + "ms";
+
+// ---------------------------------------------------------------------------
+// Controls: one definition drives the sliders, their labels and apply modes.
+// ---------------------------------------------------------------------------
+const CONTROLS = [
+  ["Workload", [
+    ["rate", "Workflow starts / s", 0, 60, 0.5, "live"],
+    ["phases", "Phases per Workflow", 1, 30, 1, "next"],
+    ["activitiesPerPhase", "Activities per phase", 1, 10, 1, "next"],
+  ]],
+  ["Worker options", [
+    ["wfPollers", "Workflow Task pollers", 2, 32, 1, "swap"],
+    ["wfSlots", "Workflow Task slots", 2, 200, 1, "swap"],
+    ["actPollers", "Activity pollers", 1, 32, 1, "swap"],
+    ["actSlots", "Activity slots", 1, 200, 1, "swap"],
+    ["cacheSize", "Sticky cache size", 1, 2000, 1, "cache"],
+    ["cpus", "CPUs (GOMAXPROCS)", 1, 8, 1, "cpu"],
+  ]],
+  ["Activity profile", [
+    ["durationMs", "Base duration (ms)", 10, 3000, 10, "live"],
+    ["jitterPct", "Jitter (%)", 0, 100, 5, "live"],
+    ["ioConcurrency", "Dependency concurrency (io)", 1, 64, 1, "live"],
+  ]],
+];
+const MODE_TEXT = {
+  live: ["live", "applies immediately, including to work in flight"],
+  next: ["next", "applies to Workflows started after the change"],
+  swap: ["swap", "Worker is replaced in place; the new one polls before the old one drains"],
+};
+function modeFor(kind, lane) {
+  if (kind === "cache") return lane === "go"
+    ? ["restart", "Go's sticky cache is process-wide: the Worker process restarts"]
+    : ["swap", "Python caches per Worker: swapped in place"];
+  if (kind === "cpu") return lane === "go"
+    ? ["live", "GOMAXPROCS changes immediately"]
+    : ["n/a", "Python: CPU-bound Activities share one GIL"];
+  return MODE_TEXT[kind];
+}
+
+// ---------------------------------------------------------------------------
+// Lane view construction
+// ---------------------------------------------------------------------------
+function buildLane(lane) {
+  const el = $("#lane-tpl").content.firstElementChild.cloneNode(true);
+  el.dataset.lane = lane;
+  $(".title", el).textContent = lane === "go" ? "Go Worker" : "Python Worker";
+  const v = { el, lane, inputs: {}, charts: {}, particles: [], acc: {}, cfg: null, dirty: 0 };
+
+  // Presets
+  const sel = $(".preset", el);
+  sel.innerHTML = `<option value="">Preset…</option>` +
+    state.presets.map(p => `<option value="${p.name}">${p.title}</option>`).join("");
+  sel.onchange = async () => {
+    if (!sel.value) return;
+    await fetch(`/api/preset?lane=${lane}&name=${sel.value}`, { method: "POST" });
+    const p = state.presets.find(p => p.name === sel.value);
+    $(".expect", el).textContent = p ? "Expect: " + p.expect : "";
+    v.dirty = 0;
+  };
+  $(".toggle", el).onclick = () => {
+    if (!v.cfg) return;
+    push(v, { ...v.cfg, enabled: !v.cfg.enabled });
+  };
+  $(".burst", el).onclick = () => fetch(`/api/burst?lane=${lane}&n=50`, { method: "POST" });
+
+  // Controls
+  const groups = $(".groups", el);
+  for (const [title, ctls] of CONTROLS) {
+    const fs = document.createElement("fieldset");
+    fs.innerHTML = `<legend>${title}</legend>`;
+    if (title === "Activity profile") {
+      const row = document.createElement("div");
+      row.className = "ctl";
+      row.innerHTML = `<label>Profile <span class="mode live" title="applies immediately">live</span></label>
+        <select data-k="profile"><option value="sleep">sleep — pure latency</option>
+        <option value="cpu">cpu — fixed CPU work</option><option value="io">io — call a rate-limited dependency</option></select>`;
+      fs.appendChild(row);
+      const s = $("select", row);
+      s.onchange = () => push(v, { ...v.cfg, profile: s.value });
+      v.inputs.profile = s;
+    }
+    for (const [k, label, min, max, step, kind] of ctls) {
+      const [m, tip] = modeFor(kind, lane);
+      const row = document.createElement("div");
+      row.className = "ctl";
+      row.innerHTML = `<label>${label} <span class="mode ${m === "n/a" ? "" : m}" title="${tip}">${m}</span></label>
+        <span class="val"></span><input type="range" min="${min}" max="${max}" step="${step}" data-k="${k}">`;
+      const input = $("input", row), val = $(".val", row);
+      if (m === "n/a") input.disabled = true;
+      input.oninput = () => { val.textContent = input.value; v.dirty = Date.now(); };
+      input.onchange = () => push(v, { ...v.cfg, [k]: Number(input.value) });
+      v.inputs[k] = { input, val };
+      fs.appendChild(row);
+    }
+    groups.appendChild(fs);
+  }
+
+  // Meters
+  const meters = $(".meters", el);
+  for (const [k, label, color] of [
+    ["cpu", "CPU", "var(--cpu)"], ["cache", "Sticky cache hit", "var(--cache)"],
+    ["io", "Dependency (io)", "var(--io)"], ["wfslots", "Workflow Task slots", "var(--wf)"],
+    ["actslots", "Activity slots", "var(--act)"], ["e2e", "Workflow end-to-end p95", "var(--muted)"],
+  ]) {
+    const m = document.createElement("div");
+    m.className = "meter";
+    m.innerHTML = `<div class="k">${label}</div><div class="v">–</div><div class="bar"><i style="background:${color}"></i></div>`;
+    meters.appendChild(m);
+    v["m_" + k] = m;
+  }
+
+  // Charts
+  const charts = $(".charts", el);
+  for (const [k, title, series] of [
+    ["thru", "Throughput (/s, completed)", [["wf", "Workflow Tasks", "--wf"], ["act", "Activities", "--act"]]],
+    ["s2s", "Schedule-to-start p95 (s)", [["wf", "Workflow Task", "--wf"], ["act", "Activity", "--act"]]],
+    ["backlog", "Queue depth ≈ dispatch × mean wait", [["wf", "Workflow", "--wf"], ["act", "Activity", "--act"], ["srv", "server gauge (act)", "--muted"]]],
+    ["slots", "Slot utilisation (%)", [["wf", "Workflow", "--wf"], ["act", "Activity", "--act"]]],
+    ["cpu", "CPU (% of available)", [["cpu", "CPU", "--cpu"]]],
+    ["cache", "Sticky cache hit (%)", [["cache", "hit ratio", "--cache"]]],
+    ["sync", "Sync match (% of dispatches)", [["wf", "Workflow", "--wf"], ["act", "Activity", "--act"]]],
+  ]) {
+    const c = document.createElement("div");
+    c.className = "chart";
+    c.innerHTML = `<div class="t"><span>${title}</span><span class="legend">${series.map(s =>
+      `<i style="background:var(${s[2]})"></i>${s[1]}`).join("")}</span></div><canvas></canvas>`;
+    charts.appendChild(c);
+    v.charts[k] = { canvas: $("canvas", c), series };
+  }
+
+  buildScene(v);
+  state.views[lane] = v;
+  $("#lanes").appendChild(el);
+  return v;
+}
+
+function push(v, cfg) {
+  v.dirty = 0;
+  return fetch(`/api/config?lane=${v.lane}`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(cfg),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// SVG scene: Load -> Server Task Queues -> Worker pollers + slots
+// ---------------------------------------------------------------------------
+const NS = "http://www.w3.org/2000/svg";
+function s(tag, attrs, parent, text) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (text != null) e.textContent = text;
+  parent && parent.appendChild(e);
+  return e;
+}
+const ROWS = { wf: 112, act: 242 };
+const X = { load: 24, queue: 230, qw: 280, poll: 610, slots: 700, sw: 380 };
+
+function buildScene(v) {
+  const g = $(".scene", v.el);
+  const box = (x, y, w, h, label) => {
+    s("rect", { x, y, width: w, height: h, rx: 10, fill: "#0f141a", stroke: "#2a3340" }, g);
+    s("text", { x: x + 12, y: y + 18, class: "muted", "font-size": 11, "letter-spacing": "0.08em" }, g, label);
+  };
+  box(10, 20, 170, 290, "CLIENT (load)");
+  box(205, 20, 340, 290, "TEMPORAL SERVICE");
+  box(580, 20, 510, 290, "WORKER");
+  v.t = {
+    rate: s("text", { x: X.load, y: 112, "font-size": 22 }, g),
+    rateK: s("text", { x: X.load, y: 130, class: "muted", "font-size": 11 }, g, "Workflow starts / s"),
+    started: s("text", { x: X.load, y: 180, "font-size": 13 }, g),
+    errs: s("text", { x: X.load, y: 202, "font-size": 12, class: "muted" }, g),
+    shape: s("text", { x: X.load, y: 250, "font-size": 12, class: "muted" }, g),
+  };
+  for (const row of ["wf", "act"]) {
+    const y = ROWS[row], col = row === "wf" ? "var(--wf)" : "var(--act)";
+    s("text", { x: X.queue, y: y - 34, "font-size": 12, class: "muted" }, g,
+      row === "wf" ? "Workflow Task Queue" : "Activity Task Queue");
+    s("rect", { x: X.queue, y: y - 22, width: X.qw, height: 30, rx: 6, fill: "#1a212b", stroke: "#2a3340" }, g);
+    v.t[row + "Fill"] = s("rect", { x: X.queue + X.qw, y: y - 22, width: 0, height: 30, rx: 6, fill: col, opacity: 0.55 }, g);
+    v.t[row + "Count"] = s("text", { x: X.queue + 8, y: y - 2, "font-size": 14 }, g);
+    v.t[row + "Rates"] = s("text", { x: X.queue, y: y + 26, "font-size": 10.5, class: "muted" }, g);
+    s("text", { x: X.poll - 10, y: y - 34, "font-size": 12, class: "muted" }, g, "pollers");
+    s("text", { x: X.slots, y: y - 34, "font-size": 12, class: "muted" }, g,
+      row === "wf" ? "Workflow Task slots" : "Activity slots");
+    v.t[row + "Pollers"] = s("g", {}, g);
+    v.t[row + "Slots"] = s("g", {}, g);
+    v.t[row + "SlotTxt"] = s("text", { x: X.slots, y: y + 42, "font-size": 11, class: "muted" }, g);
+  }
+  v.t.particles = s("g", {}, g);
+}
+
+function drawPollers(gEl, configured, active, y, color) {
+  gEl.replaceChildren();
+  const n = Math.min(configured, 12);
+  for (let i = 0; i < n; i++) {
+    const cx = X.poll + (i % 4) * 18, cy = y - 12 + Math.floor(i / 4) * 18;
+    s("circle", { cx, cy, r: 6, fill: i < active ? color : "none", stroke: color, "stroke-width": 1.5 }, gEl);
+  }
+  if (configured > 12) s("text", { x: X.poll, y: y + 46, "font-size": 10, class: "muted" }, gEl, `${configured} total`);
+}
+
+function drawSlots(gEl, total, used, y, color) {
+  gEl.replaceChildren();
+  const cells = Math.min(Math.max(total, 1), 40);
+  const per = total / cells;
+  const cols = 20, cw = X.sw / cols - 2;
+  for (let i = 0; i < cells; i++) {
+    const x = X.slots + (i % cols) * (cw + 2), yy = y - 22 + Math.floor(i / cols) * 16;
+    const fill = (i + 1) * per <= used + 1e-9 ? color : (i * per < used ? color : "none");
+    s("rect", { x, y: yy, width: cw, height: 13, rx: 2, fill, opacity: fill === "none" ? 1 : 0.85,
+                stroke: color, "stroke-opacity": 0.5 }, gEl);
+  }
+  return per;
+}
+
+// ---------------------------------------------------------------------------
+// Particles: dots move at the MEASURED rates (starts, dispatches, completions).
+// They show flow, not individual tasks.
+// ---------------------------------------------------------------------------
+const FLOWS = [
+  ["start", X.load + 140, ROWS.wf - 8, X.queue, ROWS.wf - 8, "var(--wf)"],
+  ["wfDispatch", X.queue + X.qw, ROWS.wf - 8, X.slots, ROWS.wf - 8, "var(--wf)"],
+  ["actAdd", X.slots - 20, ROWS.wf + 10, X.queue + X.qw - 10, ROWS.act - 8, "var(--act)"],
+  ["actDispatch", X.queue + X.qw, ROWS.act - 8, X.slots, ROWS.act - 8, "var(--act)"],
+];
+function animate(now) {
+  for (const v of Object.values(state.views)) {
+    const snap = state.snap && state.snap.lanes[v.lane];
+    const dt = Math.min(0.1, (now - (v.lastFrame || now)) / 1000);
+    v.lastFrame = now;
+    if (snap && v.el.style.display !== "none") {
+      const d = snap.derived, on = snap.config.enabled;
+      const rates = {
+        start: on ? snap.config.rate : 0,
+        wfDispatch: d.WftPerSec, actAdd: d.ActPerSec, actDispatch: d.ActPerSec,
+      };
+      for (const [k, x1, y1, x2, y2, col] of FLOWS) {
+        v.acc[k] = (v.acc[k] || 0) + Math.min(rates[k] || 0, 40) * dt;
+        while (v.acc[k] >= 1 && v.particles.length < 250) {
+          v.acc[k] -= 1;
+          v.particles.push({ x1, y1: y1 + (Math.random() * 12 - 6), x2, y2: y2 + (Math.random() * 12 - 6), t: 0, col,
+            el: s("circle", { r: 3, fill: col }, v.t.particles) });
+        }
+        if (v.acc[k] > 5) v.acc[k] = 0;
+      }
+    }
+    v.particles = v.particles.filter(p => {
+      p.t += dt / 0.9;
+      if (p.t >= 1) { p.el.remove(); return false; }
+      p.el.setAttribute("cx", p.x1 + (p.x2 - p.x1) * p.t);
+      p.el.setAttribute("cy", p.y1 + (p.y2 - p.y1) * p.t);
+      return true;
+    });
+  }
+  requestAnimationFrame(animate);
+}
+
+// ---------------------------------------------------------------------------
+// Render a snapshot
+// ---------------------------------------------------------------------------
+function render(snap) {
+  for (const lane of LANES) {
+    const v = state.views[lane], l = snap.lanes[lane];
+    if (!v || !l) continue;
+    const c = l.config, d = l.derived;
+    v.cfg = c;
+
+    // Status
+    const live = l.workers.filter(w => !w.stale);
+    const st = $(".status", v.el);
+    if (!l.workers.length) { st.textContent = "no worker"; st.className = "pill status warn"; }
+    else if (!live.length) { st.textContent = "restarting…"; st.className = "pill status warn"; }
+    else if (live.some(w => !w.applied)) { st.textContent = `applying v${l.version}…`; st.className = "pill status warn"; }
+    else { st.textContent = `${live[0].sdk} · lab-${lane} · v${l.version}`; st.className = "pill status ok"; }
+    const tg = $(".toggle", v.el);
+    tg.textContent = c.enabled ? "Stop load" : "Start load";
+    tg.className = "toggle " + (c.enabled ? "stop" : "primary");
+
+    // Controls (don't fight a slider the user is dragging)
+    if (Date.now() - v.dirty > 1500) {
+      for (const k in v.inputs) {
+        const inp = v.inputs[k];
+        if (k === "profile") { inp.value = c.profile; continue; }
+        inp.input.value = c[k]; inp.val.textContent = c[k];
+      }
+    }
+
+    // Scene
+    v.t.rate.textContent = c.enabled ? fmt(c.rate, 1) : "0";
+    v.t.started.textContent = `${l.started} started`;
+    v.t.errs.textContent = l.startErrors ? `${l.startErrors} start errors` : "";
+    v.t.shape.textContent = `${c.phases} × ${c.activitiesPerPhase} Activities`;
+    for (const [row, q, est] of [["wf", l.wf, d.WftQueueEst], ["act", l.act, d.ActQueueEst]]) {
+      const w = Math.min(X.qw, X.qw * Math.log10(1 + est) / 3);
+      v.t[row + "Fill"].setAttribute("x", X.queue + X.qw - w);
+      v.t[row + "Fill"].setAttribute("width", w);
+      v.t[row + "Count"].textContent = `≈${fmt(est, 0)} queued`;
+      v.t[row + "Rates"].textContent = q.err ? "server metrics unavailable" :
+        `server: ${q.backlog} queued · ${fmt(q.dispatchRate)}/s · sync ${q.syncMatch < 0 ? "–" : fmt(q.syncMatch * 100, 0) + "%"} · ${q.pollers < 0 ? "?" : q.pollers}p`;
+    }
+    drawPollers(v.t.wfPollers, c.wfPollers, Math.round(d.PollersWF + d.PollersSticky), ROWS.wf, "var(--wf)");
+    drawPollers(v.t.actPollers, c.actPollers, Math.round(d.PollersAct), ROWS.act, "var(--act)");
+    const pw = drawSlots(v.t.wfSlots, d.WftSlotsTotal || c.wfSlots, d.WftSlotsUsed, ROWS.wf, "var(--wf)");
+    const pa = drawSlots(v.t.actSlots, d.ActSlotsTotal || c.actSlots, d.ActSlotsUsed, ROWS.act, "var(--act)");
+    v.t.wfSlotTxt.textContent = `${fmt(d.WftSlotsUsed, 0)} / ${fmt(d.WftSlotsTotal, 0)} busy${pw > 1 ? ` · 1 cell = ${fmt(pw, 1)}` : ""} · exec p95 ${ms(d.WftExecP95)}`;
+    v.t.actSlotTxt.textContent = `${fmt(d.ActSlotsUsed, 0)} / ${fmt(d.ActSlotsTotal, 0)} busy${pa > 1 ? ` · 1 cell = ${fmt(pa, 1)}` : ""} · exec p95 ${ms(d.ActExecP95)}`;
+
+    // Diagnosis
+    const dg = $(".diag", v.el);
+    const okMsg = l.diagnosis.length === 1 && /^(Keeping up|Idle)/.test(l.diagnosis[0]);
+    dg.className = "diag" + (okMsg ? " ok" : "");
+    dg.innerHTML = `<div class="tag">DIAGNOSIS (heuristic over live measurements)</div>` +
+      l.diagnosis.map(t => `<p>${t}</p>`).join("");
+
+    // Meters
+    const meter = (m, val, frac) => { $(".v", m).textContent = val; $("i", m).style.width = Math.max(0, Math.min(1, frac)) * 100 + "%"; };
+    meter(v.m_cpu, `${fmt(d.CPUCores, 2)} / ${fmt(d.CPULimit, 0)} cores`, d.CPULimit ? d.CPUCores / d.CPULimit : 0);
+    meter(v.m_cache, d.CacheHitRatio < 0 ? "–" : `${fmt(d.CacheHitRatio * 100, 0)}% · ${fmt(d.CacheSize, 0)}/${c.cacheSize}`, d.CacheHitRatio < 0 ? 0 : d.CacheHitRatio);
+    meter(v.m_io, `${l.downstream.InFlight}/${l.downstream.Limit} busy · ${l.downstream.Waiting} waiting`, l.downstream.Limit ? l.downstream.InFlight / l.downstream.Limit : 0);
+    meter(v.m_wfslots, `${fmt(d.WftSlotsUsed, 0)} / ${fmt(d.WftSlotsTotal, 0)}`, d.WftSlotsTotal ? d.WftSlotsUsed / d.WftSlotsTotal : 0);
+    meter(v.m_actslots, `${fmt(d.ActSlotsUsed, 0)} / ${fmt(d.ActSlotsTotal, 0)}`, d.ActSlotsTotal ? d.ActSlotsUsed / d.ActSlotsTotal : 0);
+    meter(v.m_e2e, ms(d.E2EP95), Math.min(1, d.E2EP95 / 30));
+
+    // Workers line
+    $(".workers", v.el).textContent = l.workers.map(w =>
+      `${w.workerId}  ${w.stale ? "STALE " + fmt(w.ageSeconds, 0) + "s" : "live"}  cfg v${w.configVersion}  rss ${fmt(w.rssMB, 0)}MB` +
+      (w.note ? "  — " + w.note : "")).join("\n") || "no Worker has reported";
+  }
+}
+
+function addPoint(snap) {
+  for (const lane of LANES) {
+    const l = snap.lanes[lane];
+    if (!l) continue;
+    const d = l.derived;
+    const p = {
+      thru: { wf: d.WftPerSec, act: d.ActPerSec },
+      s2s: { wf: d.WftS2sP95, act: d.ActS2sP95 },
+      backlog: { wf: d.WftQueueEst, act: d.ActQueueEst, srv: l.act.backlog },
+      slots: { wf: d.WftSlotsTotal ? 100 * d.WftSlotsUsed / d.WftSlotsTotal : 0,
+               act: d.ActSlotsTotal ? 100 * d.ActSlotsUsed / d.ActSlotsTotal : 0 },
+      cpu: { cpu: d.CPULimit ? 100 * d.CPUCores / d.CPULimit : 0 },
+      cache: { cache: d.CacheHitRatio < 0 ? null : 100 * d.CacheHitRatio },
+      sync: { wf: l.wf.syncMatch < 0 ? null : 100 * l.wf.syncMatch, act: l.act.syncMatch < 0 ? null : 100 * l.act.syncMatch },
+    };
+    const arr = state.series[lane] = state.series[lane] || [];
+    arr.push(p);
+    if (arr.length > HIST) arr.shift();
+  }
+}
+
+function drawCharts() {
+  const css = getComputedStyle(document.body);
+  for (const v of Object.values(state.views)) {
+    const data = state.series[v.lane] || [];
+    for (const [k, ch] of Object.entries(v.charts)) {
+      const cv = ch.canvas, dpr = window.devicePixelRatio || 1;
+      const W = cv.clientWidth, H = cv.clientHeight;
+      if (cv.width !== W * dpr) { cv.width = W * dpr; cv.height = H * dpr; }
+      const ctx = cv.getContext("2d");
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, W, H);
+      let maxV = (k === "slots" || k === "cpu" || k === "cache" || k === "sync") ? 100 : 0;
+      if (!maxV) for (const p of data) for (const [sk] of ch.series) maxV = Math.max(maxV, p[k][sk] || 0);
+      maxV = maxV || 1;
+      ctx.strokeStyle = "#222b36"; ctx.lineWidth = 1;
+      for (let i = 0; i <= 2; i++) { const y = 4 + (H - 18) * i / 2; ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+      ctx.fillStyle = css.getPropertyValue("--muted"); ctx.font = "10px ui-monospace, monospace";
+      ctx.fillText(fmt(maxV, maxV < 10 ? 2 : 0), 2, 12);
+      ctx.fillText("-" + Math.round(HIST / 60) + "m", 2, H - 2);
+      for (const [sk, , colVar] of ch.series) {
+        ctx.strokeStyle = css.getPropertyValue(colVar); ctx.lineWidth = 1.6; ctx.beginPath();
+        let started = false;
+        data.forEach((p, i) => {
+          const val = p[k][sk];
+          if (val == null) { started = false; return; }
+          const x = W * (i + HIST - data.length) / (HIST - 1), y = 4 + (H - 18) * (1 - val / maxV);
+          started ? ctx.lineTo(x, y) : ctx.moveTo(x, y); started = true;
+        });
+        ctx.stroke();
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Wire-up
+// ---------------------------------------------------------------------------
+async function init() {
+  state.presets = await (await fetch("/api/presets")).json();
+  for (const lane of LANES) buildLane(lane);
+  const show = $("#show");
+  show.onchange = () => { for (const v of Object.values(state.views)) v.el.style.display =
+    show.value === "both" || show.value === v.lane ? "" : "none"; };
+
+  const es = new EventSource("/api/stream");
+  const conn = $("#conn");
+  es.addEventListener("history", e => {
+    state.series = {};
+    for (const snap of JSON.parse(e.data) || []) addPoint(snap);
+    drawCharts();
+  });
+  es.onmessage = e => {
+    const snap = JSON.parse(e.data);
+    state.snap = snap;
+    addPoint(snap);
+    render(snap);
+    drawCharts();
+    conn.textContent = "live"; conn.className = "pill ok";
+  };
+  es.onerror = () => { conn.textContent = "reconnecting…"; conn.className = "pill warn"; };
+  requestAnimationFrame(animate);
+}
+init();
+</script>
+</body>
+</html>
