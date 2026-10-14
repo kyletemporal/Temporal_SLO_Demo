@@ -134,6 +134,26 @@ scrape_configs:
       - regex: "telemetry_sdk_name|telemetry_sdk_version|telemetry_sdk_language|service_version|exported_job"
         action: labeldrop
 
+  # ---------------------------------------------------------------------------
+  # Temporal SDK metrics — tuning lab Go Worker (profile `lab`, `make lab`)
+  #
+  # Absent unless the lab is running; dns_sd simply returns no targets. The
+  # Python lab Worker is not scraped: its metrics go to the lab UI through
+  # the SDK's MetricBuffer, and the Python SDK exports to ONE sink.
+  # ---------------------------------------------------------------------------
+  - job_name: temporal-sdk-lab-worker
+    metrics_path: /metrics
+    dns_sd_configs:
+      - names: ["lab-worker-go"]
+        type: A
+        port: 9464
+        refresh_interval: 10s
+    relabel_configs:
+      - target_label: group
+        replacement: sdk-metrics
+      - target_label: role
+        replacement: lab-worker
+
   - job_name: prometheus
     static_configs:
       - targets: ["localhost:9090"]
