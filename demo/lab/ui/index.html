@@ -223,6 +223,8 @@ function buildLane(lane) {
     ["cpu", "CPU", "var(--cpu)"], ["cache", "Sticky cache hit", "var(--cache)"],
     ["io", "Dependency (io)", "var(--io)"], ["wfslots", "Workflow Task slots", "var(--wf)"],
     ["actslots", "Activity slots", "var(--act)"], ["e2e", "Workflow end-to-end p95", "var(--muted)"],
+    ["poll", "Poll latency p50 (Activity / WFT)", "var(--wf)"],
+    ["server", "Server: persistence p95 · completion RPC p95", "var(--warn)"],
   ]) {
     const m = document.createElement("div");
     m.className = "meter";
@@ -442,6 +444,12 @@ function render(snap) {
     meter(v.m_wfslots, `${fmt(d.WftSlotsUsed, 0)} / ${fmt(d.WftSlotsTotal, 0)}`, d.WftSlotsTotal ? d.WftSlotsUsed / d.WftSlotsTotal : 0);
     meter(v.m_actslots, `${fmt(d.ActSlotsUsed, 0)} / ${fmt(d.ActSlotsTotal, 0)}`, d.ActSlotsTotal ? d.ActSlotsUsed / d.ActSlotsTotal : 0);
     meter(v.m_e2e, ms(d.E2EP95), Math.min(1, d.E2EP95 / 30));
+    // Poll latency: fast polls + a backlog = poller-bound; slow polls + a
+    // backlog = the server is slow to hand work out. Bar full at 1s.
+    meter(v.m_poll, `${ms(d.PollActP50)} / ${ms(d.PollWftP50)}`, Math.min(1, Math.max(d.PollActP50, d.PollWftP50)));
+    const sv = l.server || {};
+    meter(v.m_server, sv.err ? "unavailable" : `${ms(sv.persistenceP95 || 0)} · ${ms(sv.respondP95 || 0)}`,
+      Math.min(1, (sv.persistenceP95 || 0) / 0.1));
 
     // Workers line
     $(".workers", v.el).textContent = l.workers.map(w =>

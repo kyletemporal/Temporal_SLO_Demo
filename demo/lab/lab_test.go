@@ -58,6 +58,40 @@ func TestDiagnoseMeasuredCases(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) { expect(t, diagnose(c.snap), c.want) })
 	}
 
+	healthy := ServerHealth{PersistenceP95: 0.0046, RespondP95: 0.0464}
+	withServer := func(s *LaneSnapshot, h ServerHealth) *LaneSnapshot { s.Server = h; return s }
+	serverCases := []struct {
+		name string
+		snap *LaneSnapshot
+		want string
+	}{
+		// Postgres capped at 0.3 CPU, 16 pollers per type, Worker idle.
+		{"server-bound (postgres capped)", withServer(lane("go 1.47.0", on, Derived{
+			ActSlotsUsed: 26, ActSlotsTotal: 60, ActS2sP95: 55.5, ActQueueEst: 828,
+			WftSlotsUsed: 9, WftSlotsTotal: 50, WftS2sP95: 65.3, WftQueueEst: 102,
+			PollActP50: 0.903, PollWftP50: 1.0, CPUCores: 0.05, CPULimit: 2, CacheHitRatio: 1}),
+			ServerHealth{PersistenceP95: 0.0963, RespondP95: 4.37}), "server-bound"},
+		// The heavy-load run that LOOKED server-bound (server at 240% CPU) and
+		// was not: raising pollers 4 -> 16 cut schedule-to-start 4.4s -> 84ms.
+		// Fast polls with healthy server metrics must stay poller-bound.
+		{"poller-bound under heavy server load", withServer(lane("go 1.47.0", on, Derived{
+			ActSlotsUsed: 0, ActSlotsTotal: 60, ActS2sP95: 4.4, ActQueueEst: 115,
+			PollersAct: 4, PollActP50: 0.011, CPUCores: 0.2, CPULimit: 2, CacheHitRatio: 1}), healthy), "poller-bound"},
+		// A slow server holds slots until completion RPCs return; full slots
+		// must not be blamed on the slot count.
+		{"server-bound with full slots", withServer(lane("go 1.47.0", on, Derived{
+			ActSlotsUsed: 60, ActSlotsTotal: 60, ActS2sP95: 20, ActQueueEst: 300,
+			PollActP50: 0.002, CPUCores: 0.05, CPULimit: 2, CacheHitRatio: 1}),
+			ServerHealth{PersistenceP95: 0.09, RespondP95: 3.0}), "server-bound"},
+		// Without server metrics, fall back to the Worker-side checks.
+		{"server metrics unavailable", withServer(lane("go 1.47.0", on, Derived{
+			ActSlotsUsed: 1, ActSlotsTotal: 1, ActS2sP95: 37.7, ActQueueEst: 162,
+			CPUCores: 0.02, CPULimit: 2, CacheHitRatio: 1}), ServerHealth{Err: "connection refused"}), "slot-bound"},
+	}
+	for _, c := range serverCases {
+		t.Run(c.name, func(t *testing.T) { expect(t, diagnose(c.snap), c.want) })
+	}
+
 	cache := diagnose(lane("go 1.47.0", on, Derived{CacheHitRatio: 0, CPULimit: 2, ReplayP95: 0.0004}))
 	if !strings.Contains(strings.Join(cache, " "), "Sticky cache hit ratio 0%") {
 		t.Fatalf("cache thrash not reported: %q", cache)

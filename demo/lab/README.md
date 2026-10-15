@@ -64,6 +64,8 @@ Activity profiles:
 | Queue depth | Little's law: dispatch rate × mean schedule-to-start, both from the SDK and with no lag |
 | Server gauge, dispatch rate, sync match | The server's own `approximate_backlog_count`, `poll_success` and `poll_success_sync` in Prometheus, summed across partitions (10 s scrape) |
 | Pollers seen by the server | `DescribeTaskQueue` |
+| Poll latency | The SDK's own long-poll RPC latency (`long_request_latency`, by operation) |
+| Server persistence p95, task-completion RPC p95 | The server's `persistence_latency` and frontend `service_latency` for `Respond*TaskCompleted`, via Prometheus |
 
 The Go lab Worker is also scraped by Prometheus, so the existing Grafana
 boards show it. Note that the label is `task_queue="lab_go"`: the Prometheus
@@ -88,8 +90,23 @@ after 60 s of each preset from an empty queue.
 | Cache constrained (Go) | Sticky cache hit 0%; replay p95 0.4 ms | Cache thrash |
 | Not enough Workers (Go) | CPU 1.98 of 2; slots 3/4; about 304 queued | CPU-bound: add Workers |
 | CPU constrained (Python) | CPU 1.02 of 1 (GIL); **Workflow Task** slots 10/10 with 10 s wait, while Activity slots sat at 6/20 | GIL-bound |
+| Server-bound (Go, `make lab-slow-db`) | Postgres capped at 0.3 CPU, 16 pollers: polls 0.6–1.0 s; persistence p95 92–96 ms (healthy: 4 ms); completion RPC p95 2–4 s; throughput 135 → 18 Activities/s | Server-bound |
 
 ## Findings worth more than the presets
+
+0. **Poll latency tells poller-bound from server-bound.** Both look the same
+   from the Worker: tasks waiting, slots free, CPU idle. When it's poller-bound,
+   the tasks are ready on the server, so each poll returns in **2–16 ms**. When
+   it's server-bound, polls take **0.6–1.0 s** and the server's own persistence
+   and completion-RPC latency rise 20× or more. The diagnosis checks the server
+   *before* slots, because a slow server keeps slots occupied until its
+   completion RPCs return.
+
+   A server at 240% CPU is **not** evidence by itself. Under the heaviest mixed
+   load here, with Temporal at 240% and Postgres at 135%, Workers waited 4 s with
+   every slot free, which looked like the server. Raising pollers from 4 to 16
+   cut schedule-to-start from **4.4 s to 84 ms**. It was poller-bound, the polls
+   had been returning in 8–16 ms all along, and the server metrics were healthy.
 
 1. **One poller handles more than you'd guess.** On a low-latency network,
    one Activity poller kept up with about 200 tasks/s before a queue formed.

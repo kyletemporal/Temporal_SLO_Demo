@@ -41,7 +41,7 @@ const latencyWindow = 10 * time.Second
 //	counters: wf_completed act_completed act_failed wft_completed cache_hit cache_miss
 //	gauges:   wft_slots_used wft_slots_available act_slots_used act_slots_available
 //	          pollers_workflow pollers_sticky pollers_activity cache_size
-//	latency:  wft_s2s wft_exec act_s2s act_exec replay wf_e2e
+//	latency:  wft_s2s wft_exec act_s2s act_exec replay wf_e2e poll_wft poll_act
 var timerKeys = map[string]string{
 	"workflow_task_schedule_to_start_latency": "wft_s2s",
 	"workflow_task_execution_latency":         "wft_exec",
@@ -233,7 +233,26 @@ func (h *teeHandler) Gauge(name string) client.MetricsGauge {
 }
 
 func (h *teeHandler) Timer(name string) client.MetricsTimer {
-	return teeTimer{h.next.Timer(name), h.agg, timerKeys[canonical(name)]}
+	key := timerKeys[canonical(name)]
+	if canonical(name) == "long_request_latency" {
+		key = pollKey(h.tags["operation"])
+	}
+	return teeTimer{h.next.Timer(name), h.agg, key}
+}
+
+// pollKey maps a long-poll RPC to a canonical key. Poll latency is what tells
+// a poller-bound Worker from a server-bound one: with a backlog waiting, a
+// poll that returns fast means the server had the task ready and the Worker
+// simply is not asking often enough; a poll that returns slowly means the
+// server is slow to hand out work it already has.
+func pollKey(operation string) string {
+	switch {
+	case strings.Contains(operation, "PollActivityTaskQueue"):
+		return "poll_act"
+	case strings.Contains(operation, "PollWorkflowTaskQueue"):
+		return "poll_wft"
+	}
+	return ""
 }
 
 type teeCounter struct {
