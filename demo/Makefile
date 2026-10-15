@@ -360,3 +360,16 @@ lab-down: ## Stop the tuning lab and terminate any lab Workflows still running
 	  temporal workflow terminate --namespace default \
 	    --query "TaskQueue=\"lab-go\" OR TaskQueue=\"lab-python\"" \
 	    --reason "make lab-down" --yes' 2>/dev/null || true
+
+.PHONY: lab-slow-db
+lab-slow-db: ## Lab: cap Postgres at 0.3 CPU to make the server the bottleneck (server-bound)
+	docker update --cpus 0.3 tobs-postgres >/dev/null
+	@echo "==> Postgres capped at 0.3 CPU. Run load in the lab and watch the diagnosis turn server-bound."
+	@echo "    REQUIRED cleanup: make lab-fast-db"
+
+.PHONY: lab-fast-db
+lab-fast-db: ## Lab: REQUIRED cleanup for lab-slow-db — lift the Postgres CPU cap
+	@# `docker update --cpus 0` does not clear a limit (verified: it stayed at 0.3),
+	@# so set it to every CPU Docker has, which is no limit in practice.
+	docker update --cpus $$(docker info --format '{{.NCPU}}') tobs-postgres >/dev/null
+	@echo "==> Postgres CPU limit lifted ($$(docker info --format '{{.NCPU}}') CPUs)"

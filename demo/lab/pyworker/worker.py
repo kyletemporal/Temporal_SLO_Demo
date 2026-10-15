@@ -96,7 +96,15 @@ class Telemetry:
         for u in self.buffer.retrieve_updates():
             name = u.metric.name.removeprefix("temporal_")
             self.seen_names.add(name)
-            if name in TIMERS:
+            if name == "long_request_latency":
+                # See pollKey in ../telemetry.go: poll latency separates
+                # poller-bound from server-bound.
+                op = str(dict(u.attributes).get("operation", ""))
+                key = ("poll_act" if "PollActivityTaskQueue" in op
+                       else "poll_wft" if "PollWorkflowTaskQueue" in op else None)
+                if key:
+                    self.samples.setdefault(key, []).append((now, float(u.value)))
+            elif name in TIMERS:
                 key = TIMERS[name]
                 self.samples.setdefault(key, []).append((now, float(u.value)))
                 if key in TIMER_COUNTS:

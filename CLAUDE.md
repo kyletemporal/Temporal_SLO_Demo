@@ -16,6 +16,8 @@ infrastructure-as-code — organised as independent bundles rather than one syst
 | `monitor/` | Go service polling Visibility for workflow-**duration** SLIs | `temporal_slo_*` |
 | `terraform/` | Temporal Cloud IaC — modules, examples, design patterns | — |
 | `tools/` | Generators. **Dashboards and some rules are generated** | — |
+| `demo/lab/` | Worker tuning lab: live UI over real Go + Python Workers (`make lab`) | — |
+| `aws/eks-selfhosted/` | Self-hosted Temporal 1.28 on EKS + RDS: Terraform layer, then Helm layer | — |
 
 **Never load `demo/` and `production/` into one Prometheus.** Both record `slo:*`
 with overlapping `sli` labels; loading both silently produces wrong SLO numbers.
@@ -59,6 +61,8 @@ cd terraform && terraform fmt -check -recursive
 for d in terraform/examples/*/ terraform/patterns/*/; do (cd $d && terraform validate); done
 python3 tools/generate_visibility_rules.py --check   # drift check
 tests/promql/run.sh                 # promtool unit tests: alerts fire in the no-series cases
+cd demo/lab && go test ./...        # lab diagnosis pinned to measured cases
+cd aws/eks-selfhosted/terraform && terraform test    # mocked-provider plan checks
 ```
 
 ## Traps this repo has already hit
@@ -151,6 +155,34 @@ and never fires, or a number that looks like data and is not.
   attributes in v1.7.0, not blocks — documented `dynamic` syntax fails.
 - **`resource.Merge` with an explicit `semconv.SchemaURL` fails** when app and SDK
   semconv versions differ. Use `resource.NewSchemaless`.
+
+**Workers, the SDKs and the tuning lab** (all measured in `demo/lab/`)
+
+- **Server CPU is not evidence of a server bottleneck.** Temporal at 240% and
+  Postgres at 135%, with Workers waiting 4 s and every slot free, looked
+  server-bound. Raising pollers from 4 to 16 cut the wait to 84 ms. Read SDK
+  poll latency instead: 2–16 ms with a backlog means poller-bound, 0.6–1.0 s
+  means server-bound (confirm with persistence and completion-RPC latency).
+- **A CPU-starved Worker looks poller-bound.** Its slots are free because its
+  pollers are starved too. Check Worker CPU before blaming pollers.
+- **Python's CPU limit is the GIL's one core**, not the container's. CPU-bound
+  Activities in threads also starve Workflow Tasks through the GIL.
+- **`DescribeTaskQueue` with `ReportStats` read 0 on 1.27** while the server's
+  `approximate_backlog_count` showed hundreds of tasks across partitions. Sum
+  the server metric across partitions instead. Its `taskqueue` label is
+  sanitised: `lab-go` becomes `lab_go`. After a mass termination the gauge can
+  freeze for minutes, so cross-check it against the SDK's schedule-to-start.
+- **The Go SDK binds gRPC request/long-poll metrics to the client that dials.**
+  Clients made with `NewClientFromExisting` don't get them. Give the dialing
+  client a `MetricsHandler`.
+- **The Python SDK refuses two Workers on one queue sharing a client** ("overlapping
+  worker task types"). Use a separate client per Worker to swap without a gap.
+- **The Go sticky cache is process-wide and holds `size-1`.** Resizing it needs a
+  process restart.
+- **`docker update --cpus 0` does not clear a CPU limit.** Set it to
+  `docker info --format '{{.NCPU}}'` (that's what `make lab-fast-db` does).
+- **`histogram_quantile` returns NaN with no traffic, and `encoding/json` refuses
+  NaN.** One NaN breaks a whole JSON response. Drop NaN/Inf at the source.
 
 ## Design commitments
 

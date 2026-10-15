@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -160,7 +161,31 @@ type Derived struct {
 	// termination the gauge froze at 12 for minutes while the SDK measured a
 	// 39s schedule-to-start at 4.7 dispatches/s — a real queue of ~180.
 	WftQueueEst, ActQueueEst float64
+
+	// Long-poll RPC latency, p50 over the window. See pollKey in telemetry.go.
+	PollWftP50, PollActP50 float64
 }
+
+// ServerHealth is the Temporal server's own view of how hard it is working,
+// from its metrics in Prometheus. Shared by both lanes: they run on one server.
+type ServerHealth struct {
+	PersistenceP95 float64 `json:"persistenceP95"` // seconds, all operations
+	RespondP95     float64 `json:"respondP95"`     // seconds, Respond{Activity,Workflow}TaskCompleted at the frontend
+	Err            string  `json:"err,omitempty"`
+}
+
+// Server-bound thresholds, each about 10x the healthy value measured on this
+// lab and well below the server-bound value (Postgres capped at 0.3 CPU):
+//
+//	                         healthy (incl. heavy load)   server-bound
+//	persistence p95          2.7 - 4.6 ms                  96 ms
+//	task-completion RPC p95  32 - 48 ms                    4.0 - 4.4 s
+//	SDK poll p50, queued     2 - 16 ms (poller-bound)      790 - 1000 ms
+const (
+	persistenceSlow = 0.050
+	respondSlow     = 1.0
+	pollSlow        = 0.5
+)
 
 type LaneSnapshot struct {
 	Lane       string       `json:"lane"`
@@ -174,8 +199,9 @@ type LaneSnapshot struct {
 	Downstream struct {
 		Limit, InFlight, Waiting int
 	} `json:"downstream"`
-	Derived   Derived  `json:"derived"`
-	Diagnosis []string `json:"diagnosis"`
+	Derived   Derived      `json:"derived"`
+	Server    ServerHealth `json:"server"`
+	Diagnosis []string     `json:"diagnosis"`
 }
 
 type Snapshot struct {
@@ -207,6 +233,9 @@ type controller struct {
 	prom    string
 	lanes   map[string]*laneState
 	version atomic.Int64
+
+	healthMu sync.Mutex
+	health   ServerHealth
 
 	histMu  sync.Mutex
 	history []Snapshot // last 10 minutes, 1s apart
@@ -245,6 +274,7 @@ func runController() {
 		go c.statsLoop(l, ls)
 	}
 	go c.snapshotLoop()
+	go c.healthLoop()
 
 	mux := http.NewServeMux()
 	ui, _ := fs.Sub(uiFS, "ui")
@@ -541,9 +571,47 @@ func promQuery(base, q string) (map[string]float64, error) {
 	for _, r := range body.Data.Result {
 		s, _ := r.Value[1].(string)
 		v, _ := strconv.ParseFloat(s, 64)
+		// histogram_quantile returns NaN with no traffic, and encoding/json
+		// refuses NaN — one would break the whole live stream.
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			continue
+		}
 		out[r.Metric["task_type"]] = v
 	}
 	return out, nil
+}
+
+func (c *controller) serverHealth() ServerHealth {
+	c.healthMu.Lock()
+	defer c.healthMu.Unlock()
+	return c.health
+}
+
+func (c *controller) healthLoop() {
+	queries := map[string]string{
+		"persistence": `histogram_quantile(0.95, sum by (le) (rate(persistence_latency_bucket[1m])))`,
+		"respond": `histogram_quantile(0.95, sum by (le) (rate(service_latency_bucket{` +
+			`operation=~"RespondActivityTaskCompleted|RespondWorkflowTaskCompleted"}[1m])))`,
+	}
+	for range time.Tick(2 * time.Second) {
+		var h ServerHealth
+		for k, q := range queries {
+			m, err := promQuery(c.prom, q)
+			if err != nil {
+				h.Err = err.Error()
+				break
+			}
+			switch k {
+			case "persistence":
+				h.PersistenceP95 = m[""]
+			case "respond":
+				h.RespondP95 = m[""]
+			}
+		}
+		c.healthMu.Lock()
+		c.health = h
+		c.healthMu.Unlock()
+	}
 }
 
 // -----------------------------------------------------------------------------
@@ -669,6 +737,8 @@ func (c *controller) laneSnapshot(l string, ls *laneState) *LaneSnapshot {
 		d.ActExecP95 = max(d.ActExecP95, lat["act_exec"].P95)
 		d.ReplayP95 = max(d.ReplayP95, lat["replay"].P95)
 		d.E2EP95 = max(d.E2EP95, lat["wf_e2e"].P95)
+		d.PollWftP50 = max(d.PollWftP50, lat["poll_wft"].P50)
+		d.PollActP50 = max(d.PollActP50, lat["poll_act"].P50)
 		d.WftQueueEst += rate(h, "wft_completed") * lat["wft_s2s"].Mean
 		d.ActQueueEst += rate(h, "act_completed") * lat["act_s2s"].Mean
 	}
@@ -682,6 +752,7 @@ func (c *controller) laneSnapshot(l string, ls *laneState) *LaneSnapshot {
 	s.Started, s.StartErrs = ls.started.Load(), ls.errs.Load()
 	s.Downstream.Limit, s.Downstream.InFlight, s.Downstream.Waiting = ls.ds.stats()
 	s.Derived = d
+	s.Server = c.serverHealth()
 	s.Diagnosis = diagnose(s)
 	return s
 }
@@ -725,9 +796,20 @@ func diagnose(s *LaneSnapshot) []string {
 			"A starved Worker also polls slowly, so free slots here do not mean pollers are the problem. Adding slots makes it worse; add CPU or Workers.",
 			d.CPUCores, d.CPULimit, d.ActS2sP95, d.WftS2sP95))
 	} else {
-		check := func(kind string, q QueueStats, est, s2s, used, total, pollers float64, profileIO bool) {
+		check := func(kind string, q QueueStats, est, s2s, used, total, pollers, pollP50 float64, profileIO bool) {
 			full := total > 0 && used >= 0.9*total
 			wait := fmt.Sprintf("~%.0f queued, schedule-to-start p95 %.1fs", est, s2s)
+			// Server-bound is checked BEFORE the slot cases: a slow server holds
+			// slots open until its completion RPCs return, which would
+			// otherwise read as slot-bound.
+			srv := s.Server
+			if srv.Err == "" && (srv.PersistenceP95 >= persistenceSlow || srv.RespondP95 >= respondSlow || (!full && pollP50 >= pollSlow)) {
+				out = append(out, fmt.Sprintf("%s %s: server-bound. The Temporal server is slow to hand out and record work — persistence p95 %.0fms, "+
+					"task-completion RPC p95 %.2fs, polls taking %.2fs with tasks waiting. Worker CPU is idle and slots are free; "+
+					"more pollers, slots or Workers will not help. Look at the server and its database.",
+					kind, wait, 1000*srv.PersistenceP95, srv.RespondP95, pollP50))
+				return
+			}
 			// Full slots are checked BEFORE "nobody polling": a Worker with every
 			// slot busy stops polling by design, so zero active pollers is the
 			// normal sign of a slot-bound Worker, not of a missing one.
@@ -740,15 +822,16 @@ func diagnose(s *LaneSnapshot) []string {
 			case q.Pollers == 0 && pollers == 0:
 				out = append(out, fmt.Sprintf("%s %s and nothing is polling the queue.", kind, wait))
 			default:
-				out = append(out, fmt.Sprintf("%s %s while %.0f of %.0f slots are free and CPU is idle: tasks are not being fetched fast enough — poller-bound.",
-					kind, wait, total-used, total))
+				out = append(out, fmt.Sprintf("%s %s while %.0f of %.0f slots are free and CPU is idle, and each poll returns in %.0fms — the server has the tasks ready "+
+					"and the Worker is not asking often enough: poller-bound. Raise the poller count.",
+					kind, wait, total-used, total, 1000*pollP50))
 			}
 		}
 		if wfQ {
-			check("Workflow Tasks:", s.WF, d.WftQueueEst, d.WftS2sP95, d.WftSlotsUsed, d.WftSlotsTotal, d.PollersWF+d.PollersSticky, false)
+			check("Workflow Tasks:", s.WF, d.WftQueueEst, d.WftS2sP95, d.WftSlotsUsed, d.WftSlotsTotal, d.PollersWF+d.PollersSticky, d.PollWftP50, false)
 		}
 		if actQ {
-			check("Activities:", s.Act, d.ActQueueEst, d.ActS2sP95, d.ActSlotsUsed, d.ActSlotsTotal, d.PollersAct, s.Config.Profile == "io")
+			check("Activities:", s.Act, d.ActQueueEst, d.ActS2sP95, d.ActSlotsUsed, d.ActSlotsTotal, d.PollersAct, d.PollActP50, s.Config.Profile == "io")
 		}
 	}
 

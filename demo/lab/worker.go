@@ -64,9 +64,15 @@ func runWorker() {
 	g.prom = sdktally.NewMetricsHandler(newPrometheusScope("0.0.0.0:" + env("METRICS_PORT", "9464")))
 
 	var err error
+	// The gRPC metrics interceptor (request and long-poll latency) is bound
+	// ONCE, to the handler of the client that dials the connection — clients
+	// made later with NewClientFromExisting share the connection and its
+	// interceptor. Without a handler here, poll latency went nowhere: not to
+	// the lab, and not to Prometheus either.
 	g.base, err = client.Dial(client.Options{
-		HostPort:  env("TEMPORAL_ADDRESS", "temporal:7233"),
-		Namespace: env("TEMPORAL_NAMESPACE", "default"),
+		HostPort:       env("TEMPORAL_ADDRESS", "temporal:7233"),
+		Namespace:      env("TEMPORAL_NAMESPACE", "default"),
+		MetricsHandler: newTeeHandler(g.prom, g.agg, "rpc"),
 	})
 	if err != nil {
 		log.Fatalf("dial temporal: %v", err)
