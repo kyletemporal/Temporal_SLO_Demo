@@ -102,7 +102,9 @@ chmod +x scripts/*.sh scripts/*.py 2>/dev/null || true
 # -----------------------------------------------------------------------------
 if [ "$CLEAN" = 1 ]; then
   say "Tearing down existing stack (including volumes)"
-  docker compose down -v --remove-orphans 2>&1 | tail -3
+  # Profiles listed so the lab/langchain/tools containers are removed too;
+  # plain `down -v --remove-orphans` leaves them running.
+  docker compose --profile lab --profile langchain --profile tools down -v --remove-orphans 2>&1 | tail -3
   ok "clean slate"
 fi
 

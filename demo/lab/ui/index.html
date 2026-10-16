@@ -174,7 +174,7 @@ function buildLane(lane) {
     state.presets.map(p => `<option value="${p.name}">${p.title}</option>`).join("");
   sel.onchange = async () => {
     if (!sel.value) return;
-    await fetch(`/api/preset?lane=${lane}&name=${sel.value}`, { method: "POST" });
+    await fetch(`/api/preset?lane=${lane}&name=${sel.value}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
     const p = state.presets.find(p => p.name === sel.value);
     $(".expect", el).textContent = p ? "Expect: " + p.expect : "";
     v.dirty = 0;
@@ -183,7 +183,7 @@ function buildLane(lane) {
     if (!v.cfg) return;
     push(v, { ...v.cfg, enabled: !v.cfg.enabled });
   };
-  $(".burst", el).onclick = () => fetch(`/api/burst?lane=${lane}&n=50`, { method: "POST" });
+  $(".burst", el).onclick = () => fetch(`/api/burst?lane=${lane}&n=50`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
 
   // Controls
   const groups = $(".groups", el);
@@ -412,7 +412,8 @@ function render(snap) {
     // Scene
     v.t.rate.textContent = c.enabled ? fmt(c.rate, 1) : "0";
     v.t.started.textContent = `${l.started} started`;
-    v.t.errs.textContent = l.startErrors ? `${l.startErrors} start errors` : "";
+    v.t.errs.textContent = [l.startErrors ? `${l.startErrors} start errors` : "",
+      l.startsDropped ? `${l.startsDropped} dropped (client saturated)` : ""].filter(Boolean).join(" · ");
     v.t.shape.textContent = `${c.phases} × ${c.activitiesPerPhase} Activities`;
     for (const [row, q, est] of [["wf", l.wf, d.WftQueueEst], ["act", l.act, d.ActQueueEst]]) {
       const w = Math.min(X.qw, X.qw * Math.log10(1 + est) / 3);
