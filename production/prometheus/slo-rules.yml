@@ -99,9 +99,9 @@ groups:
       - record: slo:events_bad:rate5m
         expr: |
           (
-            (sum by (namespace) (rate(workflow_failed{namespace!~"temporal_system|system|_unknown_"}[5m]))  or sum by (namespace) (rate(workflow_success{namespace!~"temporal_system|system|_unknown_"}[5m])) * 0)
+            (sum by (namespace) (rate(workflow_failed{namespace!~"temporal_system|system|_unknown_"}[5m])) or (sum by (namespace) (rate(workflow_success{namespace!~"temporal_system|system|_unknown_"}[5m])) or sum by (namespace) (rate(workflow_failed{namespace!~"temporal_system|system|_unknown_"}[5m])) or sum by (namespace) (rate(workflow_timeout{namespace!~"temporal_system|system|_unknown_"}[5m]))) * 0)
             +
-            (sum by (namespace) (rate(workflow_timeout{namespace!~"temporal_system|system|_unknown_"}[5m])) or sum by (namespace) (rate(workflow_success{namespace!~"temporal_system|system|_unknown_"}[5m])) * 0)
+            (sum by (namespace) (rate(workflow_timeout{namespace!~"temporal_system|system|_unknown_"}[5m])) or (sum by (namespace) (rate(workflow_success{namespace!~"temporal_system|system|_unknown_"}[5m])) or sum by (namespace) (rate(workflow_failed{namespace!~"temporal_system|system|_unknown_"}[5m])) or sum by (namespace) (rate(workflow_timeout{namespace!~"temporal_system|system|_unknown_"}[5m]))) * 0)
           )
         labels:
           sli: workflow_completion
@@ -109,11 +109,11 @@ groups:
       - record: slo:events_total:rate5m
         expr: |
           (
-            sum by (namespace) (rate(workflow_success{namespace!~"temporal_system|system|_unknown_"}[5m]))
+            (sum by (namespace) (rate(workflow_success{namespace!~"temporal_system|system|_unknown_"}[5m])) or (sum by (namespace) (rate(workflow_success{namespace!~"temporal_system|system|_unknown_"}[5m])) or sum by (namespace) (rate(workflow_failed{namespace!~"temporal_system|system|_unknown_"}[5m])) or sum by (namespace) (rate(workflow_timeout{namespace!~"temporal_system|system|_unknown_"}[5m]))) * 0)
             +
-            (sum by (namespace) (rate(workflow_failed{namespace!~"temporal_system|system|_unknown_"}[5m]))  or sum by (namespace) (rate(workflow_success{namespace!~"temporal_system|system|_unknown_"}[5m])) * 0)
+            (sum by (namespace) (rate(workflow_failed{namespace!~"temporal_system|system|_unknown_"}[5m])) or (sum by (namespace) (rate(workflow_success{namespace!~"temporal_system|system|_unknown_"}[5m])) or sum by (namespace) (rate(workflow_failed{namespace!~"temporal_system|system|_unknown_"}[5m])) or sum by (namespace) (rate(workflow_timeout{namespace!~"temporal_system|system|_unknown_"}[5m]))) * 0)
             +
-            (sum by (namespace) (rate(workflow_timeout{namespace!~"temporal_system|system|_unknown_"}[5m])) or sum by (namespace) (rate(workflow_success{namespace!~"temporal_system|system|_unknown_"}[5m])) * 0)
+            (sum by (namespace) (rate(workflow_timeout{namespace!~"temporal_system|system|_unknown_"}[5m])) or (sum by (namespace) (rate(workflow_success{namespace!~"temporal_system|system|_unknown_"}[5m])) or sum by (namespace) (rate(workflow_failed{namespace!~"temporal_system|system|_unknown_"}[5m])) or sum by (namespace) (rate(workflow_timeout{namespace!~"temporal_system|system|_unknown_"}[5m]))) * 0)
           )
         labels:
           sli: workflow_completion
@@ -355,7 +355,7 @@ groups:
           component: temporal-slo
         annotations:
           summary: "{{ $labels.sli }} burning error budget 14.4x (ns={{ $labels.namespace }})"
-          description: "At this rate the entire 28d budget is gone in about two hours. Sustained over 1h and still active in the last 5m."
+          description: "At this rate the entire 28d budget is gone in about two days (14.4x a 28-day budget lasts ~47 hours). Sustained over 1h and still active in the last 5m."
 
       - alert: SLOSlowBurn
         expr: |

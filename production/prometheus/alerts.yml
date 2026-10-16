@@ -102,6 +102,61 @@ groups:
   # Task queue health — the signals that catch "nothing is failing, nothing is
   # happening", which is what a Temporal outage actually looks like.
   # ===========================================================================
+  # ===========================================================================
+  # Poll outcomes — recorded once, read by every matching alert below.
+  #
+  # Ported from demo/prometheus/alerts.yml, where each scoping rule was found
+  # by measurement:
+  #
+  # 1. taskqueue!~"temporal_sys_.*": Temporal's own system Task Queues
+  #    long-poll constantly and match almost nothing. Measured: poll_timeouts
+  #    spanned 68 series across 6 namespaces while poll_success spanned 26
+  #    across 2. Unscoped, poll success rate sits permanently low and barely
+  #    moves during a real event. The rule this replaces was unscoped; promtool
+  #    showed it firing with the application queue healthy and one idle
+  #    temporal_sys_ queue (tests/promql/production.test.yml).
+  # 2. `by (namespace)`, NOT by taskqueue. These are cluster metrics labelled
+  #    `taskqueue`; the SDK histogram uses `task_queue`. An `and` between them
+  #    can only join on namespace.
+  # ===========================================================================
+  - name: temporal-poll-outcomes
+    rules:
+      - record: temporal:poll_matched:rate5m
+        expr: sum by (namespace) (rate(poll_success{namespace!~"temporal_system|system|_unknown_", taskqueue!~"temporal_sys_.*"}[5m]))
+
+      - record: temporal:poll_sync:rate5m
+        expr: sum by (namespace) (rate(poll_success_sync{namespace!~"temporal_system|system|_unknown_", taskqueue!~"temporal_sys_.*"}[5m]))
+
+      - record: temporal:poll_empty:rate5m
+        expr: sum by (namespace) (rate(poll_timeouts{namespace!~"temporal_system|system|_unknown_", taskqueue!~"temporal_sys_.*"}[5m]))
+
+      # Async match is poll_success - poll_success_sync. Temporal exposes no
+      # async-match counter, and poll_timeouts is NOT one (it counts polls that
+      # found nothing). clamp_min because the counters can land in different
+      # scrape windows.
+      - record: temporal:poll_async:rate5m
+        expr: clamp_min(temporal:poll_matched:rate5m - temporal:poll_sync:rate5m, 0)
+
+      # "Did polls find work?" — a SIZING signal. Low means starved OR
+      # over-provisioned, which is why nothing alerts on it alone.
+      - record: temporal:poll_success_rate:ratio5m
+        expr: |
+          temporal:poll_matched:rate5m
+          / clamp_min(temporal:poll_matched:rate5m + temporal:poll_empty:rate5m, 0.001)
+
+      # "Was a Worker waiting?" — a HEALTH signal with no benign low state.
+      - record: temporal:sync_match_rate:ratio5m
+        expr: temporal:poll_sync:rate5m / clamp_min(temporal:poll_matched:rate5m, 0.001)
+
+      # The discriminator between starved and over-provisioned. SECONDS: Go and
+      # Java SDKs. Core-based SDKs (TypeScript, Python, .NET) emit MILLISECONDS
+      # under a different name — run `make verify-sdk-labels` against your
+      # Workers and adjust before trusting the two alerts that read this.
+      - record: temporal:activity_schedule_to_start:p99_5m
+        expr: |
+          histogram_quantile(0.99, sum by (namespace, le) (
+            rate(temporal_activity_schedule_to_start_latency_seconds_bucket{namespace!~"temporal_system|system|_unknown_"}[5m])))
+
   - name: temporal-task-queue-health
     rules:
       - alert: TemporalTasksWithNoPoller
@@ -122,18 +177,15 @@ groups:
           description: "Almost always a Task Queue name mismatch between starter and Worker, or a Worker fleet that is fully down. Nothing is failing — the work simply will not progress. Scaling Workers will not fix a name mismatch."
 
       - alert: TemporalSyncMatchRateLow
-        # The trailing traffic guard is not optional. On an idle Task Queue both
-        # counters sit near zero, the ratio collapses, and this fires forever on
-        # a cluster that simply has nothing to do.
+        # Needs no second condition — there is no healthy reason for Tasks to be
+        # persisted before delivery — only the traffic guard for the idle case.
+        # clamp_min is 0.001, not 1: a floor of 1 silently rescaled the ratio
+        # whenever matched-poll rate was below 1/s. The `> 1` guard is what
+        # protects the idle case.
         expr: |
-          (
-            sum by (namespace) (rate(poll_success_sync{namespace!~"temporal_system|system|_unknown_"}[5m]))
-            /
-            clamp_min(sum by (namespace) (rate(poll_success[5m])), 1)
-            < 0.95
-          )
+          (temporal:sync_match_rate:ratio5m < 0.95)
           and
-          (sum by (namespace) (rate(poll_success[5m])) > 1)
+          (temporal:poll_matched:rate5m > 1)
         for: 15m
         labels:
           severity: ticket
@@ -142,43 +194,72 @@ groups:
           summary: "Sync match rate below 95% in {{ $labels.namespace }}"
           description: "Tasks are being written to the datastore before delivery because no Worker was ready. Combined with rising schedule-to-start, the Worker fleet is undersized or under-resourced. NOTE: poll_success_sync varies by server version — verify the metric name on your build."
 
+      # REPLACES TemporalPollSuccessRateLow, which alerted on poll success rate
+      # ALONE. A starved fleet and an over-provisioned fleet both push that
+      # ratio down and need OPPOSITE responses; demo's `make chaos-poller-flood`
+      # made the old rule fire on a perfectly healthy cluster. The second
+      # condition is the discriminator: schedule-to-start is high only when
+      # Tasks are genuinely waiting.
+      - alert: TemporalMatchingStarved
+        expr: |
+          (temporal:poll_success_rate:ratio5m < 0.90)
+          and
+          (temporal:activity_schedule_to_start:p99_5m > 0.2)
+          and
+          (temporal:poll_matched:rate5m > 1)
+        for: 15m
+        labels:
+          severity: ticket
+          component: temporal-matching
+        annotations:
+          summary: "Matching starved in {{ $labels.namespace }} — polls empty AND tasks waiting"
+          description: "Poll success rate is below 90% AND schedule-to-start P99 is above 200ms, so Tasks are genuinely waiting for capacity. Check Worker host CPU next: HIGH means add Workers, LOW means raise MaxConcurrentActivityExecutionSize. Low poll success with LOW schedule-to-start is the opposite problem — see TemporalWorkerFleetOverProvisioned."
+
+      # The other half, deliberately severity: info. A COST finding, not an
+      # incident: nothing waits, nothing fails, pollers simply idle. Paging on
+      # it is how teams learn to scale UP when they should scale DOWN. Route it
+      # to a dashboard or a cost review, never a pager.
+      - alert: TemporalWorkerFleetOverProvisioned
+        expr: |
+          (temporal:poll_success_rate:ratio5m < 0.90)
+          and
+          (temporal:activity_schedule_to_start:p99_5m < 0.05)
+          and
+          (temporal:sync_match_rate:ratio5m > 0.95)
+          and
+          (temporal:poll_matched:rate5m > 1)
+        for: 30m
+        labels:
+          severity: info
+          component: temporal-matching
+        annotations:
+          summary: "Worker fleet looks over-provisioned in {{ $labels.namespace }} (cost, not an incident)"
+          description: "Poll success rate is low, but schedule-to-start is near zero and sync match is healthy — Tasks are picked up instantly and the pollers are simply idle. Reduce the fleet or enable Worker/poller autoscaling. Do NOT raise this above info."
+
   # ===========================================================================
   # Worker fleet
   # ===========================================================================
-      # Poll success rate — Josh's metric 3. Targets: >90% steady load,
-      # >95% high-volume/low-latency.
-      #
-      # This is NOT sync match rate. Sync match is sync/(all delivered) and
-      # answers "was a Worker waiting?". Poll success is success/(success+timeout)
-      # and answers "did polls find work?". A LOW value with LOW schedule-to-start
-      # and IDLE hosts means too many Workers, not too few — the one signal here
-      # whose remedy is to REMOVE capacity.
-      #
-      # Same traffic guard as sync match: on an idle queue every poll times out
-      # by design, the ratio collapses, and an unguarded rule fires forever on a
-      # cluster that simply has nothing to do.
-      - alert: TemporalPollSuccessRateLow
-        expr: |
-          (
-            sum by (namespace) (rate(poll_success[5m]))
-            /
-            clamp_min(
-              sum by (namespace) (rate(poll_success[5m]))
-              + sum by (namespace) (rate(poll_timeouts[5m])), 1)
-            < 0.90
-          )
-          and
-          (sum by (namespace) (rate(poll_success[5m])) > 1)
-        for: 15m
-        labels:
-          severity: warning
-          component: temporal-matching
-        annotations:
-          summary: "Poll success rate below 90% in {{ $labels.namespace }}"
-          description: "Polls are returning empty. Cross-check schedule-to-start latency and Worker host CPU BEFORE adding capacity: if both are low, the fleet is oversized and the fix is fewer Workers, or Worker/poller autoscaling."
-
   - name: temporal-worker-fleet
     rules:
+      - alert: TemporalWorkflowTaskScheduleToStartHigh
+        # Production previously had only the Activity version. Workflow Tasks
+        # queue too, and when they do every Workflow stalls at once.
+        expr: |
+          histogram_quantile(0.99,
+            sum by (le, namespace, task_queue) (
+              rate(temporal_workflow_task_schedule_to_start_latency_seconds_bucket{
+                namespace!~"temporal_system|system|_unknown_"
+              }[5m])
+            )
+          ) > 0.2
+        for: 10m
+        labels:
+          severity: ticket
+          component: temporal-worker
+        annotations:
+          summary: "Workflow Task schedule-to-start P99 above 200ms ({{ $labels.namespace }}/{{ $labels.task_queue }})"
+          description: "Workflow Tasks are queuing. Check Workflow Task slots and Worker host CPU before adding Workers."
+
       - alert: TemporalActivityScheduleToStartHigh
         expr: |
           histogram_quantile(0.99,
@@ -274,22 +355,27 @@ groups:
         # workflow_failed would have stayed silent while three quarters of all
         # work expired.
         #
-        # The `or ... * 0` guard is load-bearing: without it, a namespace with
-        # failures but NO successes produces no matching series on the right of
-        # the division, so a TOTAL outage yields no alert at all.
+        # Every term is guarded against the UNION of outcomes, not against
+        # workflow_success. The previous guard borrowed workflow_success —
+        # which has NO series in a total outage — so this alert went silent in
+        # exactly the case its comment said it covered (promtool: got []).
+        # Built by tools/promql_guards.py; pinned by
+        # tests/promql/production.test.yml, case 1.
         expr: |
           (
-            (sum by (namespace) (rate(workflow_failed{namespace!~"temporal_system|system|_unknown_"}[5m]))  or sum by (namespace) (rate(workflow_success[5m])) * 0)
+            (sum by (namespace) (rate(workflow_failed{namespace!~"temporal_system|system|_unknown_"}[5m])) or (sum by (namespace) (rate(workflow_success{namespace!~"temporal_system|system|_unknown_"}[5m])) or sum by (namespace) (rate(workflow_failed{namespace!~"temporal_system|system|_unknown_"}[5m])) or sum by (namespace) (rate(workflow_timeout{namespace!~"temporal_system|system|_unknown_"}[5m]))) * 0)
             +
-            (sum by (namespace) (rate(workflow_timeout{namespace!~"temporal_system|system|_unknown_"}[5m])) or sum by (namespace) (rate(workflow_success[5m])) * 0)
+            (sum by (namespace) (rate(workflow_timeout{namespace!~"temporal_system|system|_unknown_"}[5m])) or (sum by (namespace) (rate(workflow_success{namespace!~"temporal_system|system|_unknown_"}[5m])) or sum by (namespace) (rate(workflow_failed{namespace!~"temporal_system|system|_unknown_"}[5m])) or sum by (namespace) (rate(workflow_timeout{namespace!~"temporal_system|system|_unknown_"}[5m]))) * 0)
           )
           /
           clamp_min(
-            sum by (namespace) (rate(workflow_success{namespace!~"temporal_system|system|_unknown_"}[5m]))
-            +
-            (sum by (namespace) (rate(workflow_failed[5m]))  or sum by (namespace) (rate(workflow_success[5m])) * 0)
-            +
-            (sum by (namespace) (rate(workflow_timeout[5m])) or sum by (namespace) (rate(workflow_success[5m])) * 0),
+            (
+              (sum by (namespace) (rate(workflow_success{namespace!~"temporal_system|system|_unknown_"}[5m])) or (sum by (namespace) (rate(workflow_success{namespace!~"temporal_system|system|_unknown_"}[5m])) or sum by (namespace) (rate(workflow_failed{namespace!~"temporal_system|system|_unknown_"}[5m])) or sum by (namespace) (rate(workflow_timeout{namespace!~"temporal_system|system|_unknown_"}[5m]))) * 0)
+              +
+              (sum by (namespace) (rate(workflow_failed{namespace!~"temporal_system|system|_unknown_"}[5m])) or (sum by (namespace) (rate(workflow_success{namespace!~"temporal_system|system|_unknown_"}[5m])) or sum by (namespace) (rate(workflow_failed{namespace!~"temporal_system|system|_unknown_"}[5m])) or sum by (namespace) (rate(workflow_timeout{namespace!~"temporal_system|system|_unknown_"}[5m]))) * 0)
+              +
+              (sum by (namespace) (rate(workflow_timeout{namespace!~"temporal_system|system|_unknown_"}[5m])) or (sum by (namespace) (rate(workflow_success{namespace!~"temporal_system|system|_unknown_"}[5m])) or sum by (namespace) (rate(workflow_failed{namespace!~"temporal_system|system|_unknown_"}[5m])) or sum by (namespace) (rate(workflow_timeout{namespace!~"temporal_system|system|_unknown_"}[5m]))) * 0)
+            ),
             0.001
           )
           > 0.05

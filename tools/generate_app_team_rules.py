@@ -2,6 +2,8 @@
 """Minimum SLO rules for an application team building on a Temporal platform."""
 import pathlib
 
+from promql_guards import outcome_ratio_terms
+
 OUT = str(pathlib.Path(__file__).resolve().parent.parent / "app-team/prometheus/slo-rules.yml")
 
 WINDOWS = ["5m", "30m", "1h", "6h", "28d"]
@@ -35,22 +37,15 @@ SLIS = [
     dict(name="workflow_completion", objective=0.99,
          desc="Workflow Executions that completed successfully",
          # temporal_workflow_failed_total DOES NOT EXIST until the first
-         # failure. The `or ... * 0` guard manufactures a zero-valued series
-         # with matching labels so the ratio resolves instead of vanishing.
-         bad=('(\n'
-              f'            sum(rate(temporal_workflow_failed_total{{{SCOPE}}}[5m]))\n'
-              '            or\n'
-              f'            sum(rate(temporal_workflow_completed_total{{{SCOPE}}}[5m])) * 0\n'
-              '          )'),
-         total=('(\n'
-                f'            sum(rate(temporal_workflow_completed_total{{{SCOPE}}}[5m]))\n'
-                '            +\n'
-                '            (\n'
-                f'              sum(rate(temporal_workflow_failed_total{{{SCOPE}}}[5m]))\n'
-                '              or\n'
-                f'              sum(rate(temporal_workflow_completed_total{{{SCOPE}}}[5m])) * 0\n'
-                '            )\n'
-                '          )')),
+         # failure, and after a Worker restart temporal_workflow_completed_total
+         # does not exist until the first success. Each term is guarded against
+         # the UNION of both (tools/promql_guards.py); the old guard borrowed
+         # the success series and went EMPTY when nothing was succeeding.
+         **dict(zip(("bad", "total"), outcome_ratio_terms(
+             {"success": f"temporal_workflow_completed_total{{{SCOPE}}}",
+              "failed": f"temporal_workflow_failed_total{{{SCOPE}}}"},
+             bad=("failed",),
+             wrap="sum(rate({}[5m]))")))),
 
     dict(name="task_delivery", objective=0.99,
          desc=f"Activity Tasks picked up by a Worker within {S2S_LE}s of scheduling",
@@ -179,7 +174,7 @@ def emit():
         labels: {severity: page, component: temporal-app}
         annotations:
           summary: "{{ $labels.sli }} is burning error budget 14.4x too fast"
-          description: "At this rate the whole 28-day budget is gone in about two hours."
+          description: "At this rate the whole 28-day budget is gone in about two days."
 
       - alert: AppSLOErrorBudgetExhausted
         expr: appslo:error_budget_remaining:ratio <= 0

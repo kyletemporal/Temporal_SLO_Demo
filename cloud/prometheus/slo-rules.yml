@@ -72,20 +72,20 @@ groups:
       # --- cloud_service_availability: gRPC requests to the Namespace that did not return a service error
       - record: cloudslo:events_bad:rate5m
         expr: |
-          avg_over_time(temporal_cloud_v1_service_error_count[5m])
-            or avg_over_time(temporal_cloud_v1_service_request_count[5m]) * 0
+          sum by (temporal_namespace) (avg_over_time(temporal_cloud_v1_service_error_count[5m]))
+            or sum by (temporal_namespace) (avg_over_time(temporal_cloud_v1_service_request_count[5m])) * 0
         labels:
           sli: cloud_service_availability
       - record: cloudslo:events_total:rate5m
         expr: |
-          avg_over_time(temporal_cloud_v1_service_request_count[5m])
+          sum by (temporal_namespace) (avg_over_time(temporal_cloud_v1_service_request_count[5m]))
         labels:
           sli: cloud_service_availability
 
       # --- cloud_start_workflow_latency: Minutes where StartWorkflowExecution p95 stayed under 500ms
       - record: cloudslo:events_bad:rate5m
         expr: |
-          (
+          sum by (temporal_namespace) (
             (temporal_cloud_v1_service_latency_p95{operation="StartWorkflowExecution"} > bool 0.5)
             and (temporal_cloud_v1_service_request_count{operation="StartWorkflowExecution"} > 0.33)
           )
@@ -93,7 +93,7 @@ groups:
           sli: cloud_start_workflow_latency
       - record: cloudslo:events_total:rate5m
         expr: |
-          (temporal_cloud_v1_service_request_count{operation="StartWorkflowExecution"} > bool 0.33)
+          sum by (temporal_namespace) (temporal_cloud_v1_service_request_count{operation="StartWorkflowExecution"} > bool 0.33)
         labels:
           sli: cloud_start_workflow_latency
 
@@ -101,20 +101,20 @@ groups:
       - record: cloudslo:events_bad:rate5m
         expr: |
           (
-            (avg_over_time(temporal_cloud_v1_workflow_failed_count[5m])  or avg_over_time(temporal_cloud_v1_workflow_success_count[5m]) * 0)
+            (sum by (temporal_namespace) (avg_over_time(temporal_cloud_v1_workflow_failed_count[5m])) or (sum by (temporal_namespace) (avg_over_time(temporal_cloud_v1_workflow_success_count[5m])) or sum by (temporal_namespace) (avg_over_time(temporal_cloud_v1_workflow_failed_count[5m])) or sum by (temporal_namespace) (avg_over_time(temporal_cloud_v1_workflow_timeout_count[5m]))) * 0)
             +
-            (avg_over_time(temporal_cloud_v1_workflow_timeout_count[5m]) or avg_over_time(temporal_cloud_v1_workflow_success_count[5m]) * 0)
+            (sum by (temporal_namespace) (avg_over_time(temporal_cloud_v1_workflow_timeout_count[5m])) or (sum by (temporal_namespace) (avg_over_time(temporal_cloud_v1_workflow_success_count[5m])) or sum by (temporal_namespace) (avg_over_time(temporal_cloud_v1_workflow_failed_count[5m])) or sum by (temporal_namespace) (avg_over_time(temporal_cloud_v1_workflow_timeout_count[5m]))) * 0)
           )
         labels:
           sli: workflow_completion
       - record: cloudslo:events_total:rate5m
         expr: |
           (
-            avg_over_time(temporal_cloud_v1_workflow_success_count[5m])
+            (sum by (temporal_namespace) (avg_over_time(temporal_cloud_v1_workflow_success_count[5m])) or (sum by (temporal_namespace) (avg_over_time(temporal_cloud_v1_workflow_success_count[5m])) or sum by (temporal_namespace) (avg_over_time(temporal_cloud_v1_workflow_failed_count[5m])) or sum by (temporal_namespace) (avg_over_time(temporal_cloud_v1_workflow_timeout_count[5m]))) * 0)
             +
-            (avg_over_time(temporal_cloud_v1_workflow_failed_count[5m])  or avg_over_time(temporal_cloud_v1_workflow_success_count[5m]) * 0)
+            (sum by (temporal_namespace) (avg_over_time(temporal_cloud_v1_workflow_failed_count[5m])) or (sum by (temporal_namespace) (avg_over_time(temporal_cloud_v1_workflow_success_count[5m])) or sum by (temporal_namespace) (avg_over_time(temporal_cloud_v1_workflow_failed_count[5m])) or sum by (temporal_namespace) (avg_over_time(temporal_cloud_v1_workflow_timeout_count[5m]))) * 0)
             +
-            (avg_over_time(temporal_cloud_v1_workflow_timeout_count[5m]) or avg_over_time(temporal_cloud_v1_workflow_success_count[5m]) * 0)
+            (sum by (temporal_namespace) (avg_over_time(temporal_cloud_v1_workflow_timeout_count[5m])) or (sum by (temporal_namespace) (avg_over_time(temporal_cloud_v1_workflow_success_count[5m])) or sum by (temporal_namespace) (avg_over_time(temporal_cloud_v1_workflow_failed_count[5m])) or sum by (temporal_namespace) (avg_over_time(temporal_cloud_v1_workflow_timeout_count[5m]))) * 0)
           )
         labels:
           sli: workflow_completion
@@ -123,20 +123,20 @@ groups:
       - record: cloudslo:events_bad:rate5m
         expr: |
           (
-            (avg_over_time(temporal_cloud_v1_activity_fail_count[5m])    or avg_over_time(temporal_cloud_v1_activity_success_count[5m]) * 0)
+            (sum by (temporal_namespace) (avg_over_time(temporal_cloud_v1_activity_fail_count[5m])) or (sum by (temporal_namespace) (avg_over_time(temporal_cloud_v1_activity_success_count[5m])) or sum by (temporal_namespace) (avg_over_time(temporal_cloud_v1_activity_fail_count[5m])) or sum by (temporal_namespace) (avg_over_time(temporal_cloud_v1_activity_timeout_count[5m]))) * 0)
             +
-            (avg_over_time(temporal_cloud_v1_activity_timeout_count[5m]) or avg_over_time(temporal_cloud_v1_activity_success_count[5m]) * 0)
+            (sum by (temporal_namespace) (avg_over_time(temporal_cloud_v1_activity_timeout_count[5m])) or (sum by (temporal_namespace) (avg_over_time(temporal_cloud_v1_activity_success_count[5m])) or sum by (temporal_namespace) (avg_over_time(temporal_cloud_v1_activity_fail_count[5m])) or sum by (temporal_namespace) (avg_over_time(temporal_cloud_v1_activity_timeout_count[5m]))) * 0)
           )
         labels:
           sli: activity_completion
       - record: cloudslo:events_total:rate5m
         expr: |
           (
-            avg_over_time(temporal_cloud_v1_activity_success_count[5m])
+            (sum by (temporal_namespace) (avg_over_time(temporal_cloud_v1_activity_success_count[5m])) or (sum by (temporal_namespace) (avg_over_time(temporal_cloud_v1_activity_success_count[5m])) or sum by (temporal_namespace) (avg_over_time(temporal_cloud_v1_activity_fail_count[5m])) or sum by (temporal_namespace) (avg_over_time(temporal_cloud_v1_activity_timeout_count[5m]))) * 0)
             +
-            (avg_over_time(temporal_cloud_v1_activity_fail_count[5m])    or avg_over_time(temporal_cloud_v1_activity_success_count[5m]) * 0)
+            (sum by (temporal_namespace) (avg_over_time(temporal_cloud_v1_activity_fail_count[5m])) or (sum by (temporal_namespace) (avg_over_time(temporal_cloud_v1_activity_success_count[5m])) or sum by (temporal_namespace) (avg_over_time(temporal_cloud_v1_activity_fail_count[5m])) or sum by (temporal_namespace) (avg_over_time(temporal_cloud_v1_activity_timeout_count[5m]))) * 0)
             +
-            (avg_over_time(temporal_cloud_v1_activity_timeout_count[5m]) or avg_over_time(temporal_cloud_v1_activity_success_count[5m]) * 0)
+            (sum by (temporal_namespace) (avg_over_time(temporal_cloud_v1_activity_timeout_count[5m])) or (sum by (temporal_namespace) (avg_over_time(temporal_cloud_v1_activity_success_count[5m])) or sum by (temporal_namespace) (avg_over_time(temporal_cloud_v1_activity_fail_count[5m])) or sum by (temporal_namespace) (avg_over_time(temporal_cloud_v1_activity_timeout_count[5m]))) * 0)
           )
         labels:
           sli: activity_completion
@@ -144,15 +144,16 @@ groups:
       # --- task_delivery: Tasks arriving on a Task Queue that had an active poller
       - record: cloudslo:events_bad:rate5m
         expr: |
-          avg_over_time(temporal_cloud_v1_no_poller_tasks_count[5m])
-            or avg_over_time(temporal_cloud_v1_service_request_count[5m]) * 0
+          sum by (temporal_namespace) (avg_over_time(temporal_cloud_v1_no_poller_tasks_count[5m]))
+            or sum by (temporal_namespace) (avg_over_time(temporal_cloud_v1_poll_success_count[5m])) * 0
         labels:
           sli: task_delivery
       - record: cloudslo:events_total:rate5m
         expr: |
           (
-            avg_over_time(temporal_cloud_v1_no_poller_tasks_count[5m])
-            + avg_over_time(temporal_cloud_v1_workflow_success_count[5m])
+            sum by (temporal_namespace) (avg_over_time(temporal_cloud_v1_poll_success_count[5m]))
+            +
+            (sum by (temporal_namespace) (avg_over_time(temporal_cloud_v1_no_poller_tasks_count[5m])) or sum by (temporal_namespace) (avg_over_time(temporal_cloud_v1_poll_success_count[5m])) * 0)
           )
         labels:
           sli: task_delivery
@@ -297,7 +298,7 @@ groups:
         labels: {severity: page, component: temporal-cloud-slo}
         annotations:
           summary: "{{ $labels.sli }} burning budget 14.4x in {{ $labels.temporal_namespace }}"
-          description: "The entire 28d budget goes in about two hours at this rate. If cloud_service_availability is the SLI, check https://status.temporal.io before assuming it is yours."
+          description: "The entire 28d budget goes in about two days at this rate (14.4x a 28-day budget lasts ~47 hours). If cloud_service_availability is the SLI, check https://status.temporal.io before assuming it is yours."
 
       - alert: CloudSLOSlowBurn
         expr: |

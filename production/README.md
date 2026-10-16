@@ -10,7 +10,7 @@ existing Prometheus + Grafana and point them at a real cluster.
 ```
 prometheus/
   slo-rules.yml            SLIs, error budgets, burn-rate alerts   (46 rules)
-  alerts.yml               Operational alerts   (9 active + 1 commented)
+  alerts.yml               Operational alerts   (13 active + 1 commented, 7 recording rules)
   prometheus.example.yml   Scrape config: one target per service role
 grafana/dashboards/
   temporal-golden-signals.json   RED + Saturation, with SLOs on top

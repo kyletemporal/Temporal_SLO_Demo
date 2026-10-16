@@ -59,22 +59,16 @@ groups:
       - record: appslo:events_bad:rate5m
         expr: |
           (
-            sum(rate(temporal_workflow_failed_total{namespace="$NAMESPACE", task_queue="$TASK_QUEUE"}[5m]))
-            or
-            sum(rate(temporal_workflow_completed_total{namespace="$NAMESPACE", task_queue="$TASK_QUEUE"}[5m])) * 0
+            (sum(rate(temporal_workflow_failed_total{namespace="$NAMESPACE", task_queue="$TASK_QUEUE"}[5m])) or (sum(rate(temporal_workflow_completed_total{namespace="$NAMESPACE", task_queue="$TASK_QUEUE"}[5m])) or sum(rate(temporal_workflow_failed_total{namespace="$NAMESPACE", task_queue="$TASK_QUEUE"}[5m]))) * 0)
           )
         labels:
           sli: workflow_completion
       - record: appslo:events_total:rate5m
         expr: |
           (
-            sum(rate(temporal_workflow_completed_total{namespace="$NAMESPACE", task_queue="$TASK_QUEUE"}[5m]))
+            (sum(rate(temporal_workflow_completed_total{namespace="$NAMESPACE", task_queue="$TASK_QUEUE"}[5m])) or (sum(rate(temporal_workflow_completed_total{namespace="$NAMESPACE", task_queue="$TASK_QUEUE"}[5m])) or sum(rate(temporal_workflow_failed_total{namespace="$NAMESPACE", task_queue="$TASK_QUEUE"}[5m]))) * 0)
             +
-            (
-              sum(rate(temporal_workflow_failed_total{namespace="$NAMESPACE", task_queue="$TASK_QUEUE"}[5m]))
-              or
-              sum(rate(temporal_workflow_completed_total{namespace="$NAMESPACE", task_queue="$TASK_QUEUE"}[5m])) * 0
-            )
+            (sum(rate(temporal_workflow_failed_total{namespace="$NAMESPACE", task_queue="$TASK_QUEUE"}[5m])) or (sum(rate(temporal_workflow_completed_total{namespace="$NAMESPACE", task_queue="$TASK_QUEUE"}[5m])) or sum(rate(temporal_workflow_failed_total{namespace="$NAMESPACE", task_queue="$TASK_QUEUE"}[5m]))) * 0)
           )
         labels:
           sli: workflow_completion
@@ -198,7 +192,7 @@ groups:
         labels: {severity: page, component: temporal-app}
         annotations:
           summary: "{{ $labels.sli }} is burning error budget 14.4x too fast"
-          description: "At this rate the whole 28-day budget is gone in about two hours."
+          description: "At this rate the whole 28-day budget is gone in about two days."
 
       - alert: AppSLOErrorBudgetExhausted
         expr: appslo:error_budget_remaining:ratio <= 0
