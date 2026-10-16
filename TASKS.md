@@ -235,7 +235,7 @@ Postgres CPU.
 2. **First real EKS deploy** from AWS CloudShell: `bash cloudshell.sh up`. Check
    the vCPU quota first (it needs 12 or more). A passing `smoke-test.sh` closes #8.
    It costs about $1/hour until `bash cloudshell.sh down`.
-3. **PR #7 (transfer prep) is still in draft.** Five `REPLACE_ME(...)` decisions
+3. **PR #7 (transfer prep) is still in draft.** Five transfer-placeholder decisions
    are waiting on their owners: support posture ×2, disclosure policy, code of
    conduct, CODEOWNERS.
 4. **Validator fragility (existing, not from the lab).** The worker-scale
