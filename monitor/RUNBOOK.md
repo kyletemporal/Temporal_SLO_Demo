@@ -81,7 +81,9 @@ SLI counts an over-budget open execution in the denominator already, so
 terminating moves it from one denominator term to another and the compliance
 number does not change. Verified — 5 executions moved from
 `over_budget_executions{bucket="1"}` to `closed_over_budget` and compliance held
-at `0.793336` exactly. The number cannot be improved by destroying the evidence.
+at `0.793336` exactly. (It briefly rose between the two poll loops until all
+three terms were counted in one poll — fixed.) The number cannot be improved by
+destroying the evidence.
 
 Terminate when terminating is the right operational call, not to make a
 dashboard look better.

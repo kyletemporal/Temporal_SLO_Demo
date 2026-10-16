@@ -20,18 +20,19 @@ groups:
     rules:
       # Compliance over the SLO window.
       #
-      # `sum without(bucket)` is LOAD-BEARING. over_budget_executions carries a
-      # `bucket` label the closed gauges do not, and a Prometheus binary operator
-      # requires identical label sets — without it this expression returns EMPTY
-      # rather than a wrong number, which no panel or alert would report. This
-      # was shipped broken in DESIGN.md until it was run against a live cluster.
-      #
       # The third denominator term is the design's central property: an OPEN
       # execution past budget is already a violation and can never become
       # compliant, so it belongs in the denominator NOW. That is what makes
-      # terminating a stuck Workflow fail to improve this number — verified:
-      # 5 executions moved from over_budget{bucket="1"} to closed_over_budget
-      # and compliance held at 0.793336 exactly.
+      # terminating a stuck Workflow fail to improve this number.
+      #
+      # All three terms come from ONE window poll, at one instant. The open
+      # term used to be the fast loop's over_budget_executions{bucket="1"},
+      # refreshed every 60s while the closed terms refresh every 600s: a
+      # terminated execution left the open term up to 10 minutes before it
+      # entered closed_over_budget, and compliance ROSE in between. The
+      # monitor now snapshots the open count in the same poll and publishes
+      # the three together or not at all. Pinned by
+      # tests/promql/monitor.test.yml.
       - record: cloudslo:workflow_compliance:ratio
         expr: |
           temporal_slo_closed_in_budget
@@ -39,7 +40,7 @@ groups:
           clamp_min(
             temporal_slo_closed_in_budget
             + temporal_slo_closed_over_budget
-            + sum without(bucket) (temporal_slo_over_budget_executions{bucket="1"}),
+            + temporal_slo_over_budget_executions_at_window_poll,
             1
           )
 
@@ -123,15 +124,24 @@ groups:
       # that a frozen gauge looks healthy, so freshness must be alerted
       # separately. Removing this rule while keeping that behaviour turns the
       # design's safest property into a silent failure.
+      #
+      # The threshold is PER POLL LOOP. A single 300s threshold sat below the
+      # window loop's own 600s interval, so closed_window crossed it on every
+      # cycle and this critical alert was armed by normal operation. 300s is
+      # five fast polls (60s); 1500s is two and a half window polls (600s).
+      # Change both if you change poll_interval / window_poll_interval.
       - alert: CloudWorkflowSLOMonitorStale
-        expr: time() - temporal_slo_last_successful_poll_timestamp_seconds > 300
+        expr: |
+          (time() - temporal_slo_last_successful_poll_timestamp_seconds{query_kind!="closed_window"} > 300)
+          or
+          (time() - temporal_slo_last_successful_poll_timestamp_seconds{query_kind="closed_window"} > 1500)
         for: 5m
         labels:
           severity: critical
           component: workflow-slo
         annotations:
           summary: "SLO monitor polls stale for {{ $labels.workflow_type }} ({{ $labels.query_kind }})"
-          description: "Visibility queries have not succeeded for over 5 minutes. Every temporal_slo_* gauge is showing its LAST KNOWN value, not current state. Treat the duration SLI as unavailable, not as good news. Check temporal_slo_poll_errors_total for the error_type."
+          description: "Visibility queries of this kind have not ALL succeeded within 5 minutes (25 for closed_window). Every temporal_slo_* gauge is showing its LAST KNOWN value, not current state. Treat the duration SLI as unavailable, not as good news. Check temporal_slo_poll_errors_total for the error_type."
 
       # Fires on the signal being unavailable, not on it reporting zero.
       - alert: CloudWorkflowSLOStuckDetectionUnavailable

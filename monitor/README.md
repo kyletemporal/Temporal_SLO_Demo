@@ -87,7 +87,10 @@ workflow-outcome metric is a counter over executions that ENDED.
 
 **Terminating a stuck Workflow does not improve the SLI.** Verified end to end:
 on release, 5 executions moved from `over_budget_executions{bucket="1"}` to
-`closed_over_budget` (4374 → 4379) and compliance held at `0.793336` exactly.
+`closed_over_budget` (4374 → 4379) and compliance held at `0.793336` exactly
+— once both poll loops had refreshed. Between them it briefly ROSE, because
+the open term was refreshed every 60s and the closed terms every 600s; all
+three now come from one poll (`over_budget_executions_at_window_poll`).
 An open execution past budget is already a violation, so it sits in the
 denominator from the moment it crosses.
 

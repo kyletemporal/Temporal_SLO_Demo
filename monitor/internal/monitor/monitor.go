@@ -36,6 +36,11 @@ type Monitor struct {
 
 	mu             sync.RWMutex
 	stuckAvailable bool
+	// probePending: the last probe hit a TRANSIENT error, so availability is
+	// not yet known and the next fast poll probes again. Only a definitive
+	// rejection settles it — one Unavailable at startup used to disable stuck
+	// detection until the process restarted.
+	probePending bool
 }
 
 func New(cfg *config.Config, c counter.Counter, m *metrics.Metrics, log *slog.Logger) *Monitor {
@@ -102,6 +107,15 @@ func (mo *Monitor) probeStuckDetection(ctx context.Context) {
 	}
 
 	available := err == nil
+	if err != nil && !definitiveRejection(err) {
+		// Unavailable, DeadlineExceeded, ResourceExhausted...: says nothing
+		// about the search attribute. Try again on the next fast poll.
+		mo.setStuckAvailable(false)
+		mo.setProbePending(true)
+		mo.log.Warn("stuck-detection probe failed transiently; will re-probe", "error", err)
+		return
+	}
+	mo.setProbePending(false)
 	mo.setStuckAvailable(available)
 	mo.m.DetectionAvail.WithLabelValues(mo.cfg.Deployment.Namespace, "reported_problems").Set(boolToFloat(available))
 	// The duration ladder always works: it needs only StartTime, which every
@@ -124,6 +138,24 @@ func (mo *Monitor) probeStuckDetection(ctx context.Context) {
 		"error", err)
 }
 
+// definitiveRejection is the server saying "this query is not valid here" —
+// the attribute does not exist. Everything else is transient.
+func definitiveRejection(err error) bool {
+	return errorIs[*serviceerror.InvalidArgument](err) || errorIs[*serviceerror.NotFound](err)
+}
+
+func (mo *Monitor) setProbePending(v bool) {
+	mo.mu.Lock()
+	defer mo.mu.Unlock()
+	mo.probePending = v
+}
+
+func (mo *Monitor) ProbePending() bool {
+	mo.mu.RLock()
+	defer mo.mu.RUnlock()
+	return mo.probePending
+}
+
 func (mo *Monitor) setStuckAvailable(v bool) {
 	mo.mu.Lock()
 	defer mo.mu.Unlock()
@@ -137,27 +169,43 @@ func (mo *Monitor) StuckAvailable() bool {
 }
 
 func (mo *Monitor) pollFast(ctx context.Context) {
+	if mo.ProbePending() {
+		mo.probeStuckDetection(ctx)
+	}
 	now := mo.now()
 	for _, wt := range mo.cfg.WorkflowTypes {
 		if n, ok := mo.count(ctx, wt.Name, metrics.KindRunning, visibility.Running(wt.Name, wt.TaskQueue)); ok {
 			mo.m.Running.WithLabelValues(wt.Name, wt.TaskQueue).Set(float64(n))
+			mo.fresh(wt.Name, metrics.KindRunning)
 		}
 
+		allOK := true
 		for _, mult := range mo.cfg.Defaults.Buckets {
 			q := visibility.OverBudget(wt.Name, wt.TaskQueue, wt.Budget.Std(), mult, now)
-			if n, ok := mo.count(ctx, wt.Name, metrics.KindOverBudget, q); ok {
+			n, ok := mo.count(ctx, wt.Name, metrics.KindOverBudget, q)
+			if ok {
 				mo.m.OverBudget.WithLabelValues(wt.Name, wt.TaskQueue, strconv.Itoa(mult)).Set(float64(n))
 			}
+			allOK = allOK && ok
+		}
+		if allOK {
+			mo.fresh(wt.Name, metrics.KindOverBudget)
 		}
 
 		if !mo.StuckAvailable() {
 			continue
 		}
+		allOK = true
 		for _, cause := range visibility.ReportedProblemCauses {
 			q := visibility.StuckByCause(wt.Name, wt.TaskQueue, cause)
-			if n, ok := mo.count(ctx, wt.Name, metrics.KindStuck, q); ok {
+			n, ok := mo.count(ctx, wt.Name, metrics.KindStuck, q)
+			if ok {
 				mo.m.Stuck.WithLabelValues(wt.Name, wt.TaskQueue, cause).Set(float64(n))
 			}
+			allOK = allOK && ok
+		}
+		if allOK {
+			mo.fresh(wt.Name, metrics.KindStuck)
 		}
 	}
 }
@@ -170,16 +218,34 @@ func (mo *Monitor) pollWindow(ctx context.Context) {
 	for _, wt := range mo.cfg.WorkflowTypes {
 		budget := wt.Budget.Std()
 
+		// All three SLI terms at the same `now`. See OverBudgetAtWin in
+		// metrics.go for what mixing loops did to compliance.
 		inQ := visibility.ClosedInWindow(wt.Name, wt.TaskQueue, budget, true, statuses, win, now)
-		if n, ok := mo.count(ctx, wt.Name, metrics.KindClosed, inQ); ok {
-			mo.m.ClosedInBudget.WithLabelValues(wt.Name, wt.TaskQueue).Set(float64(n))
-		}
-
 		overQ := visibility.ClosedInWindow(wt.Name, wt.TaskQueue, budget, false, statuses, win, now)
-		if n, ok := mo.count(ctx, wt.Name, metrics.KindClosed, overQ); ok {
-			mo.m.ClosedOver.WithLabelValues(wt.Name, wt.TaskQueue).Set(float64(n))
+		openQ := visibility.OverBudget(wt.Name, wt.TaskQueue, budget, 1, now)
+
+		in, okIn := mo.count(ctx, wt.Name, metrics.KindClosed, inQ)
+		over, okOver := mo.count(ctx, wt.Name, metrics.KindClosed, overQ)
+		open, okOpen := mo.count(ctx, wt.Name, metrics.KindClosed, openQ)
+
+		// All or nothing. Publishing two fresh terms beside one stale one would
+		// recreate the very skew the snapshot exists to remove.
+		if !(okIn && okOver && okOpen) {
+			continue
 		}
+		mo.m.ClosedInBudget.WithLabelValues(wt.Name, wt.TaskQueue).Set(float64(in))
+		mo.m.ClosedOver.WithLabelValues(wt.Name, wt.TaskQueue).Set(float64(over))
+		mo.m.OverBudgetAtWin.WithLabelValues(wt.Name, wt.TaskQueue).Set(float64(open))
+		mo.fresh(wt.Name, metrics.KindClosed)
 	}
+}
+
+// fresh stamps a kind's freshness timestamp. Callers stamp only when EVERY
+// query of that kind succeeded in the cycle: stamped per query, one
+// permanently failing query sat frozen at its old value while its siblings
+// kept the timestamp at "now", and MonitorPollsStale never fired.
+func (mo *Monitor) fresh(wfType, kind string) {
+	mo.m.LastSuccessPoll.WithLabelValues(wfType, kind).Set(float64(mo.now().Unix()))
 }
 
 // count runs one query and records latency, errors and freshness.
@@ -190,7 +256,8 @@ func (mo *Monitor) pollWindow(ctx context.Context) {
 // outage where that is least likely to be true, and it would do so in a way that
 // looks like healthy data. Prometheus keeps the previous value instead, and
 // last_successful_poll_timestamp_seconds is what tells you it is stale — alert
-// on that, or the frozen value becomes its own silent failure.
+// on that, or the frozen value becomes its own silent failure. Freshness is
+// stamped by the caller (see fresh), once per kind, not here per query.
 func (mo *Monitor) count(ctx context.Context, wfType, kind, query string) (int64, bool) {
 	start := mo.now()
 	n, err := mo.c.Count(ctx, query)
@@ -206,7 +273,6 @@ func (mo *Monitor) count(ctx context.Context, wfType, kind, query string) (int64
 		return 0, false
 	}
 
-	mo.m.LastSuccessPoll.WithLabelValues(wfType, kind).Set(float64(mo.now().Unix()))
 	return n, true
 }
 
