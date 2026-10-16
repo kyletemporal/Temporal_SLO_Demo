@@ -113,7 +113,7 @@ echo "    First build pulls images and Go modules; allow a few minutes."
 if ! docker compose up -d --build; then
   echo
   echo "    Build failed. Two failures account for almost all of them:"
-  echo "      'toolchain upgrade needed'  -> bump FROM golang:1.25-alpine in app/Dockerfile"
+  echo "      'toolchain upgrade needed'  -> bump FROM golang:1.26-alpine in app/Dockerfile"
   echo "      'ambiguous import genproto' -> app/metrics.go is importing the m3db fork"
   echo "    See SETUP.md > Troubleshooting."
   exit 1

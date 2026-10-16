@@ -234,9 +234,10 @@ routing. Rules route directly via `notification_settings.contact_point`.
    applied. The Karpenter setting most likely to need tuning is
    `consolidationPolicy` — watch `temporal_activity_execution_failed_total`
    after a scale-down.
-5. **Rebuild images once go1.25.13 is published** to clear the 10 stdlib
-   vulnerabilities in `SECURITY.md` P8. `golang:1.25-alpine` is a floating tag,
-   so `docker compose build --no-cache` picks it up with no file change.
+5. ~~**Rebuild images once go1.25.13 is published**~~ Done 2026-10-16 the only
+   way that worked: builders moved to Go 1.26 (every fixed `x/net` release
+   requires it) and `x/net`/`grpc` bumped. `govulncheck` with the images'
+   go1.26.9: 0 reachable in `demo/app` and `monitor`. See `SECURITY.md` P8.
 6. **Burn-rate ladder for duration SLOs** (optional). Not computable from the
    monitor's point-in-time gauges; would need short-window closed counts on the
    fast loop, roughly doubling Visibility query volume. Deliberate trade,

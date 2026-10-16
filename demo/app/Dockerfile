@@ -4,7 +4,7 @@
 # GOTOOLCHAIN=local, which means a too-old builder fails outright rather than
 # silently downloading a newer toolchain. If the build dies with
 # "toolchain upgrade needed", bump this tag; that is the intended fix.
-FROM golang:1.25-alpine AS build
+FROM golang:1.26-alpine AS build
 
 WORKDIR /src
 
