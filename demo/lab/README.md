@@ -13,6 +13,28 @@ make lab-down
 
 The lab starts idle. Pick a preset, or press **Start load**, on either lane.
 
+**It runs in its own Temporal Namespace, `lab`,** which the controller registers
+on startup. That is what keeps it out of the demo app's SLOs: the demo's
+application-tier SLIs (`worker_task_delivery`, `workflow_completion`) are
+scoped to `namespace="default"`. Measured with demo traffic and a
+slot-constrained lab preset running together:
+- the demo's own `worker_task_delivery` read **5.3% bad**, its normal baseline;
+- the same SLI unscoped would have read **16.2%**, inflated 3× by the lab's 10 s waits.
+
+The platform SLIs (frontend, history, matching, persistence) are not scoped,
+and that's deliberate. Lab traffic is real load on the server, and
+`make lab-slow-db` *should* burn those budgets. The demo's operational alerts
+also evaluate the `lab` namespace: they fire with `namespace="lab"` when a
+preset creates the condition they watch for.
+
+**The UI is bound to `127.0.0.1:8095` only.** The controller has no
+authentication. Its state-changing endpoints accept only `POST` with
+`Content-Type: application/json`, so a cross-site page can't trigger them
+without a CORS preflight, which the controller refuses.
+
+**On a Docker host with fewer than 4 CPUs,** set `LAB_GO_CPUS=2 make lab`. Docker
+refuses a CPU limit above the host's count.
+
 ## What it is, and what it is not
 
 It was inspired by
@@ -68,7 +90,7 @@ Activity profiles:
 | Server persistence p95, task-completion RPC p95 | The server's `persistence_latency` and frontend `service_latency` for `Respond*TaskCompleted`, via Prometheus |
 
 The Go lab Worker is also scraped by Prometheus, so the existing Grafana
-boards show it. Note that the label is `task_queue="lab_go"`: the Prometheus
+boards show it, in namespace `lab`. Note that the label is `task_queue="lab_go"`: the Prometheus
 naming rewrites the dash. The Python Worker isn't scraped, because the Python
 SDK exports metrics to one destination only, and here that is the lab.
 
@@ -143,8 +165,12 @@ after 60 s of each preset from an empty queue.
 - **One Worker per lane in the UI.** Scale with
   `docker compose --profile lab up -d --scale lab-worker-go=3`; the controller
   sums the Workers.
-- **CPU ceilings:** the Go Worker container is capped at 4 CPUs and the Python
-  one at 2, so the CPU presets can't starve the rest of the stack.
+- **CPU ceilings:** the Go Worker container is capped at 4 CPUs
+  (`LAB_GO_CPUS`) and the Python one at 2 (`LAB_PY_CPUS`), so the CPU presets
+  can't starve the rest of the stack. The Go Worker reports the smaller of
+  `GOMAXPROCS` and that quota as its CPU limit. With `GOMAXPROCS=8` in a 4-CPU
+  container, the limit used to read 8, so a saturated Worker read as half-idle
+  and was diagnosed poller-bound. It now reads 4 of 4 and is diagnosed CPU-bound.
 - **This is one laptop,** where network latency to the server is close to zero.
   Pollers and sync match behave differently across a real network.
 - **Cleanup:** `make lab-down` terminates any lab Workflows still running.

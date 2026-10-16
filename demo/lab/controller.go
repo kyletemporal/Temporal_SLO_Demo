@@ -4,6 +4,7 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log"
@@ -17,9 +18,11 @@ import (
 	"time"
 
 	enumspb "go.temporal.io/api/enums/v1"
+	"go.temporal.io/api/serviceerror"
 	taskqueuepb "go.temporal.io/api/taskqueue/v1"
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/client"
+	"google.golang.org/protobuf/types/known/durationpb"
 )
 
 //go:embed ui
@@ -196,6 +199,7 @@ type LaneSnapshot struct {
 	Act        QueueStats   `json:"act"`
 	Started    int64        `json:"started"`
 	StartErrs  int64        `json:"startErrors"`
+	Dropped    int64        `json:"startsDropped"`
 	Downstream struct {
 		Limit, InFlight, Waiting int
 	} `json:"downstream"`
@@ -223,7 +227,9 @@ type laneState struct {
 	history map[string][]counterPoint // per worker, for rates
 	wf, act QueueStats
 	started atomic.Int64
-	errs    atomic.Int64
+	errs    atomic.Int64 // starts the server rejected
+	dropped atomic.Int64 // starts skipped because this lane's client was saturated
+	sem     chan struct{}
 	ds      *limiter
 }
 
@@ -244,16 +250,26 @@ type controller struct {
 	subs   map[chan []byte]struct{}
 }
 
+// labNamespace is the lab's own Temporal Namespace. NOT "default": the demo
+// application's SLOs are scoped to "default", and the lab's presets create
+// bottlenecks on purpose — run in "default", one slot-constrained preset
+// (37.7s schedule-to-start) drained the demo's worker_task_delivery budget.
+const labNamespace = "lab"
+
 func runController() {
+	ns := env("TEMPORAL_NAMESPACE", labNamespace)
 	tc, err := client.Dial(client.Options{
 		HostPort:  env("TEMPORAL_ADDRESS", "temporal:7233"),
-		Namespace: env("TEMPORAL_NAMESPACE", "default"),
+		Namespace: ns,
 	})
 	if err != nil {
 		log.Fatalf("dial temporal: %v", err)
 	}
+	// Before serving anything: Workers wait for the controller's config, so
+	// they never poll a Namespace that does not exist yet.
+	ensureNamespace(tc, ns)
 	c := &controller{
-		tc: tc, ns: env("TEMPORAL_NAMESPACE", "default"),
+		tc: tc, ns: ns,
 		prom:  env("PROMETHEUS_URL", "http://prometheus:9090"),
 		lanes: map[string]*laneState{},
 		subs:  map[chan []byte]struct{}{},
@@ -267,6 +283,7 @@ func runController() {
 		ls := &laneState{
 			cfg: cfg, reports: map[string]WorkerReport{}, seenAt: map[string]time.Time{},
 			history: map[string][]counterPoint{}, ds: newLimiter(cfg.IOConcurrency),
+			sem: make(chan struct{}, maxConcurrentStarts),
 		}
 		ls.version = c.version.Add(1)
 		c.lanes[l] = ls
@@ -279,11 +296,11 @@ func runController() {
 	mux := http.NewServeMux()
 	ui, _ := fs.Sub(uiFS, "ui")
 	mux.Handle("/", http.FileServer(http.FS(ui)))
-	mux.HandleFunc("/api/config", c.handleConfig)
-	mux.HandleFunc("/api/report", c.handleReport)
+	mux.HandleFunc("/api/config", c.handleConfig) // GET for Workers; POST is guarded inside
+	mux.HandleFunc("/api/report", mutating(c.handleReport))
 	mux.HandleFunc("/api/presets", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, presets) })
-	mux.HandleFunc("/api/preset", c.handlePreset)
-	mux.HandleFunc("/api/burst", c.handleBurst)
+	mux.HandleFunc("/api/preset", mutating(c.handlePreset))
+	mux.HandleFunc("/api/burst", mutating(c.handleBurst))
 	mux.HandleFunc("/api/stream", c.handleStream)
 	mux.HandleFunc("/downstream", c.handleDownstream)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })
@@ -291,6 +308,30 @@ func runController() {
 	addr := ":" + env("HTTP_PORT", "8095")
 	log.Printf("tuning lab listening on %s", addr)
 	log.Fatal(http.ListenAndServe(addr, mux))
+}
+
+// ensureNamespace registers the lab's Namespace if it is missing. Idempotent:
+// AlreadyExists is success. Retries while the server is still starting.
+func ensureNamespace(tc client.Client, ns string) {
+	for attempt := 1; ; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_, err := tc.WorkflowService().RegisterNamespace(ctx, &workflowservice.RegisterNamespaceRequest{
+			Namespace:                        ns,
+			Description:                      "Worker tuning lab (demo/lab). Isolated from the demo app's SLOs.",
+			WorkflowExecutionRetentionPeriod: durationpb.New(24 * time.Hour),
+		})
+		cancel()
+		var exists *serviceerror.NamespaceAlreadyExists
+		if err == nil || errors.As(err, &exists) {
+			log.Printf("namespace %q ready", ns)
+			return
+		}
+		if attempt >= 30 {
+			log.Fatalf("register namespace %q: %v", ns, err)
+		}
+		log.Printf("register namespace %q (attempt %d): %v", ns, attempt, err)
+		time.Sleep(2 * time.Second)
+	}
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
@@ -308,12 +349,42 @@ func (c *controller) lane(w http.ResponseWriter, r *http.Request) (string, *lane
 }
 
 // GET: Workers poll this. POST: the UI sends a full LaneConfig.
+// mutating guards every endpoint that changes state: POST only, and a JSON
+// Content-Type. The JSON requirement is the CSRF defence — a cross-site form
+// or <img> can only send "simple" requests, and application/json is not one,
+// so a browser must preflight it and the controller (which sends no CORS
+// headers) refuses. Without it, any web page open on the same machine could
+// start up to 2000 Workflows with one POST to /api/burst.
+func mutating(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !jsonPost(w, r) {
+			return
+		}
+		h(w, r)
+	}
+}
+
+func jsonPost(w http.ResponseWriter, r *http.Request) bool {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return false
+	}
+	if ct := r.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		http.Error(w, "Content-Type must be application/json", http.StatusUnsupportedMediaType)
+		return false
+	}
+	return true
+}
+
 func (c *controller) handleConfig(w http.ResponseWriter, r *http.Request) {
 	_, ls, ok := c.lane(w, r)
 	if !ok {
 		return
 	}
-	if r.Method == http.MethodPost {
+	if r.Method != http.MethodGet {
+		if !jsonPost(w, r) {
+			return
+		}
 		var cfg LaneConfig
 		if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -432,7 +503,9 @@ func (c *controller) handleBurst(w http.ResponseWriter, r *http.Request) {
 // down to match the Workers and hide every backlog this lab exists to show.
 // -----------------------------------------------------------------------------
 
-var startSem = make(chan struct{}, 64)
+// Each lane has its own start semaphore (laneState.sem). One global one let a
+// backed-up lane's starts be counted as the OTHER lane's errors.
+const maxConcurrentStarts = 64
 
 func (c *controller) loadLoop(l string, ls *laneState) {
 	var tokens float64
@@ -448,13 +521,13 @@ func (c *controller) loadLoop(l string, ls *laneState) {
 		tokens += cfg.Rate * tick.Seconds()
 		for ; tokens >= 1; tokens-- {
 			select {
-			case startSem <- struct{}{}:
+			case ls.sem <- struct{}{}:
 				go func() {
-					defer func() { <-startSem }()
+					defer func() { <-ls.sem }()
 					c.start(l, ls, cfg)
 				}()
 			default:
-				ls.errs.Add(1) // starts backing up at the client: count, don't queue
+				ls.dropped.Add(1) // the client is saturated: count it, don't queue it
 			}
 		}
 	}
@@ -544,9 +617,13 @@ func (c *controller) promQueue(l string, wf, act *QueueStats) error {
 	return nil
 }
 
+// promClient has a timeout: a hung Prometheus otherwise froze the stats loop
+// with no error shown.
+var promClient = &http.Client{Timeout: 5 * time.Second}
+
 // promQuery runs an instant query and returns value by task_type.
 func promQuery(base, q string) (map[string]float64, error) {
-	resp, err := http.Get(base + "/api/v1/query?query=" + url.QueryEscape(q))
+	resp, err := promClient.Get(base + "/api/v1/query?query=" + url.QueryEscape(q))
 	if err != nil {
 		return nil, err
 	}
@@ -749,7 +826,7 @@ func (c *controller) laneSnapshot(l string, ls *laneState) *LaneSnapshot {
 	}
 	ls.mu.Unlock()
 
-	s.Started, s.StartErrs = ls.started.Load(), ls.errs.Load()
+	s.Started, s.StartErrs, s.Dropped = ls.started.Load(), ls.errs.Load(), ls.dropped.Load()
 	s.Downstream.Limit, s.Downstream.InFlight, s.Downstream.Waiting = ls.ds.stats()
 	s.Derived = d
 	s.Server = c.serverHealth()

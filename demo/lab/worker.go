@@ -24,12 +24,17 @@ import (
 	"go.temporal.io/sdk/workflow"
 )
 
+// httpClient talks to the controller. A timeout, so a hung controller stalls
+// one report rather than the reporting loop forever.
+var httpClient = &http.Client{Timeout: 5 * time.Second}
+
 // exitCacheResize is the exit code for "restart me with a new sticky cache
 // size". Compose restarts the container; the UI shows the gap.
 const exitCacheResize = 3
 
 type goWorker struct {
 	lane       string
+	namespace  string
 	controller string
 	base       client.Client
 	prom       client.MetricsHandler
@@ -42,7 +47,9 @@ type goWorker struct {
 
 	mu         sync.Mutex
 	current    worker.Worker
+	currentCl  client.Client
 	currentID  string
+	running    *LaneConfig // options the CURRENT Worker was built with
 	cacheSize  int
 	swapCount  int
 	itersPerMs float64
@@ -52,6 +59,7 @@ func runWorker() {
 	lane := env("LANE", "go")
 	g := &goWorker{
 		lane:       lane,
+		namespace:  env("TEMPORAL_NAMESPACE", labNamespace),
 		controller: env("CONTROLLER_URL", "http://lab-controller:8095"),
 		agg:        newAggregator(),
 		startedAt:  time.Now(),
@@ -60,7 +68,8 @@ func runWorker() {
 	g.id = fmt.Sprintf("%s-%s", lane, host)
 
 	// Prometheus on :9464 as well as the live view, so the lab Workers also
-	// show up on the existing Grafana boards under task_queue="lab-go".
+	// show up on the existing Grafana boards — under task_queue="lab_go":
+	// the Prometheus naming scope rewrites the dash.
 	g.prom = sdktally.NewMetricsHandler(newPrometheusScope("0.0.0.0:" + env("METRICS_PORT", "9464")))
 
 	var err error
@@ -71,7 +80,7 @@ func runWorker() {
 	// the lab, and not to Prometheus either.
 	g.base, err = client.Dial(client.Options{
 		HostPort:       env("TEMPORAL_ADDRESS", "temporal:7233"),
-		Namespace:      env("TEMPORAL_NAMESPACE", "default"),
+		Namespace:      g.namespace,
 		MetricsHandler: newTeeHandler(g.prom, g.agg, "rpc"),
 	})
 	if err != nil {
@@ -104,7 +113,7 @@ func (g *goWorker) waitForConfig() *LaneConfigVersioned {
 }
 
 func (g *goWorker) fetchConfig() (*LaneConfigVersioned, error) {
-	resp, err := http.Get(g.controller + "/api/config?lane=" + g.lane)
+	resp, err := httpClient.Get(g.controller + "/api/config?lane=" + g.lane)
 	if err != nil {
 		return nil, err
 	}
@@ -132,7 +141,6 @@ func needsSwap(a, b LaneConfig) bool {
 }
 
 func (g *goWorker) apply(next *LaneConfigVersioned) {
-	prev := g.cfg.Load()
 	g.cfg.Store(next)
 	c := next.Config
 
@@ -148,8 +156,15 @@ func (g *goWorker) apply(next *LaneConfigVersioned) {
 		log.Printf("GOMAXPROCS -> %d", c.CPUs)
 	}
 
-	if prev == nil || needsSwap(prev.Config, c) {
-		g.swap(c)
+	// Compare against the options the running Worker was BUILT with, not the
+	// previous config. A failed swap leaves the old Worker running, and
+	// comparing configs would then see "no change" on the next poll and mark
+	// the version applied without ever swapping — the bug this replaced.
+	if g.running == nil || needsSwap(*g.running, c) {
+		if err := g.swap(c); err != nil {
+			log.Printf("config v%d NOT applied, will retry: %v", next.Version, err)
+			return
+		}
 	}
 	g.applied.Store(next.Version)
 	log.Printf("config v%d applied: %+v", next.Version, c)
@@ -158,18 +173,22 @@ func (g *goWorker) apply(next *LaneConfigVersioned) {
 // swap starts a Worker with the new options BEFORE stopping the old one, so
 // the Task Queue never has zero pollers. For a few seconds both run, and the
 // slot gauges sum across them — that overlap is real and visible.
-func (g *goWorker) swap(c LaneConfig) {
+func (g *goWorker) swap(c LaneConfig) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
 	g.swapCount++
 	instance := fmt.Sprintf("%s#%d", g.id, g.swapCount)
+	// Namespace MUST be repeated: NewClientFromExisting does not inherit it,
+	// and options without one silently mean "default". Found when the lab
+	// moved to its own Namespace — the Worker kept polling lab-go in
+	// "default", where nothing was ever scheduled.
 	cl, err := client.NewClientFromExisting(g.base, client.Options{
+		Namespace:      g.namespace,
 		MetricsHandler: newTeeHandler(g.prom, g.agg, instance),
 	})
 	if err != nil {
-		log.Printf("swap: client: %v", err)
-		return
+		return fmt.Errorf("swap: client: %w", err)
 	}
 	w := worker.New(cl, taskQueueFor(g.lane), worker.Options{
 		MaxConcurrentWorkflowTaskPollers:       max(c.WFPollers, 2), // SDK minimum is 2
@@ -182,20 +201,24 @@ func (g *goWorker) swap(c LaneConfig) {
 	w.RegisterWorkflowWithOptions(LabWorkflow, workflow.RegisterOptions{Name: workflowName})
 	w.RegisterActivityWithOptions(g.labActivity, activity.RegisterOptions{Name: activityName})
 	if err := w.Start(); err != nil {
-		log.Printf("swap: start: %v", err)
 		cl.Close()
-		return
+		return fmt.Errorf("swap: start: %w", err)
 	}
 
-	old, oldID := g.current, g.currentID
-	g.current, g.currentID = w, instance
+	old, oldCl, oldID := g.current, g.currentCl, g.currentID
+	g.current, g.currentCl, g.currentID = w, cl, instance
+	g.running = &c
 	if old != nil {
 		go func() {
 			old.Stop() // drains in-flight Activities, up to WorkerStopTimeout
+			// Each swap gets its own client; close it once its Worker is gone
+			// or every swap leaks one. The shared connection stays open.
+			oldCl.Close()
 			g.agg.dropInstance(oldID)
 			log.Printf("drained %s", oldID)
 		}()
 	}
+	return nil
 }
 
 // -----------------------------------------------------------------------------
@@ -252,6 +275,8 @@ func calibrate() float64 {
 func (g *goWorker) downstream(ctx context.Context, d time.Duration) error {
 	url := fmt.Sprintf("%s/downstream?lane=%s&ms=%d", g.controller, g.lane, d.Milliseconds())
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	// No client timeout here: the Activity's own context bounds it, and the
+	// time spent queued at the dependency is the thing being measured.
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err
@@ -266,6 +291,22 @@ func (g *goWorker) downstream(ctx context.Context, d time.Duration) error {
 // -----------------------------------------------------------------------------
 // Reporting
 // -----------------------------------------------------------------------------
+
+// effectiveCPULimit is the CPU the Worker can actually use: GOMAXPROCS or the
+// container's cgroup quota, whichever is smaller. Reporting GOMAXPROCS alone
+// broke the CPU-bound diagnosis above the quota: at GOMAXPROCS=8 in a 4-CPU
+// container the threshold was 6.8 cores, which the container can never reach,
+// so a saturated Worker read as idle and fell through to "poller-bound".
+func effectiveCPULimit() float64 {
+	limit := float64(runtime.GOMAXPROCS(0))
+	if b, err := os.ReadFile("/sys/fs/cgroup/cpu.max"); err == nil {
+		var quota, period float64
+		if n, _ := fmt.Sscanf(string(b), "%f %f", &quota, &period); n == 2 && period > 0 {
+			limit = min(limit, quota/period)
+		}
+	}
+	return limit
+}
 
 func cpuSeconds() float64 {
 	var ru syscall.Rusage
@@ -287,11 +328,11 @@ func (g *goWorker) reportLoop() {
 			Lane: g.lane, WorkerID: g.id, SDK: "go " + temporal.SDKVersion,
 			ConfigVersion: g.applied.Load(), StartedAt: g.startedAt,
 			Counters: counters, Gauges: gauges, Latency: lat,
-			CPUCores: cores, CPULimit: float64(runtime.GOMAXPROCS(0)),
+			CPUCores: cores, CPULimit: effectiveCPULimit(),
 			RSSMB: float64(ms.Sys) / (1 << 20),
 		}
 		body, _ := json.Marshal(rep)
-		resp, err := http.Post(g.controller+"/api/report", "application/json", bytes.NewReader(body))
+		resp, err := httpClient.Post(g.controller+"/api/report", "application/json", bytes.NewReader(body))
 		if err == nil {
 			resp.Body.Close()
 		}

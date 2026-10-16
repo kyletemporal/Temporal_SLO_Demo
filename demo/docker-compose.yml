@@ -238,10 +238,12 @@ services:
         condition: service_healthy
     environment:
       TEMPORAL_ADDRESS: temporal:7233
-      TEMPORAL_NAMESPACE: default
+      TEMPORAL_NAMESPACE: lab
       HTTP_PORT: "8095"
+    # Loopback only. The controller has no authentication and can start
+    # thousands of Workflows; it must not be reachable from the LAN.
     ports:
-      - "8095:8095"
+      - "127.0.0.1:8095:8095"
     networks: [tobs]
 
   lab-worker-go:
@@ -256,11 +258,15 @@ services:
       LANE: go
       CONTROLLER_URL: http://lab-controller:8095
       TEMPORAL_ADDRESS: temporal:7233
-      TEMPORAL_NAMESPACE: default
+      TEMPORAL_NAMESPACE: lab
       METRICS_PORT: "9464"
     # A hard ceiling so the CPU-constrained preset cannot starve the rest of
-    # the stack. GOMAXPROCS (the "CPUs" control) is set inside it.
-    cpus: 4
+    # the stack. GOMAXPROCS (the "CPUs" control) is set inside it, and the
+    # Worker reports min(GOMAXPROCS, this quota) as its CPU limit.
+    # Override on small hosts: Docker REFUSES a value above the host's CPU
+    # count, so `make lab` fails outright on a 2-CPU Docker VM at the default.
+    #   LAB_GO_CPUS=2 make lab
+    cpus: "${LAB_GO_CPUS:-4}"
     networks: [tobs]
 
   lab-worker-python:
@@ -272,8 +278,8 @@ services:
       LANE: python
       CONTROLLER_URL: http://lab-controller:8095
       TEMPORAL_ADDRESS: temporal:7233
-      TEMPORAL_NAMESPACE: default
-    cpus: 2
+      TEMPORAL_NAMESPACE: lab
+    cpus: "${LAB_PY_CPUS:-2}"
     networks: [tobs]
 
   # ---------------------------------------------------------------------------

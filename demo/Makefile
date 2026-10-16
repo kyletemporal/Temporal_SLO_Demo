@@ -3,6 +3,10 @@ SHELL := /bin/bash
 
 K6 := docker compose --profile tools run --rm k6 run
 
+# Every optional profile. Used by `down`/`reset` so profiled services are
+# stopped with the rest of the stack instead of being left running.
+ALL_PROFILES := --profile lab --profile langchain --profile tools
+
 .PHONY: help
 help: ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | \
@@ -24,13 +28,17 @@ up: ## Build and start the full stack
 
 .PHONY: down
 down: ## Stop the stack, KEEPING metrics and logs
-	@# No -v. Error budgets are cumulative over 28 days and are worthless if a
-	@# routine stop wipes them. `make reset` is the destructive one.
-	docker compose down
+	@# No -v: a routine stop must not wipe Prometheus history, or every SLO
+	@# window restarts empty. `make reset` is the destructive one.
+	@#
+	@# The profiles are listed so their containers stop too. Without them,
+	@# `down` (even `down -v --remove-orphans`) leaves the lab and langchain
+	@# Workers running and fails to remove the network ("still in use").
+	docker compose $(ALL_PROFILES) down
 
 .PHONY: reset
 reset: ## Stop the stack and DELETE all metrics, logs and database state
-	docker compose down -v
+	docker compose $(ALL_PROFILES) down -v
 
 .PHONY: logs
 logs: ## Tail logs for the demo app
@@ -357,8 +365,8 @@ lab: ## Start the Worker tuning lab UI at http://localhost:8095 (Go + Python Wor
 lab-down: ## Stop the tuning lab and terminate any lab Workflows still running
 	-docker compose --profile lab stop lab-controller lab-worker-go lab-worker-python
 	@docker exec tobs-temporal sh -c 'export TEMPORAL_ADDRESS=$$(hostname -i | cut -d" " -f1):7233; \
-	  temporal workflow terminate --namespace default \
-	    --query "TaskQueue=\"lab-go\" OR TaskQueue=\"lab-python\"" \
+	  temporal workflow terminate --namespace lab \
+	    --query "ExecutionStatus=\"Running\"" \
 	    --reason "make lab-down" --yes' 2>/dev/null || true
 
 .PHONY: lab-slow-db

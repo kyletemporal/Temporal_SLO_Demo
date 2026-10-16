@@ -39,3 +39,32 @@ tests:
         exp_samples:
           - labels: 'slo:sli_bad:ratio_rate5m{sli="workflow_completion"}'
             value: 0
+
+  # The Worker tuning lab (namespace "lab") creates bottlenecks on purpose. It
+  # must not spend the demo app's budget: here the lab's Activities all wait
+  # >200ms and its Workflows all fail, while the demo app is healthy.
+  - interval: 1m
+    input_series:
+      - series: 'temporal_activity_schedule_to_start_latency_seconds_bucket{namespace="default",task_queue="orders",le="0.2"}'
+        values: '0+100x40'
+      - series: 'temporal_activity_schedule_to_start_latency_seconds_count{namespace="default",task_queue="orders"}'
+        values: '0+100x40'
+      - series: 'temporal_activity_schedule_to_start_latency_seconds_bucket{namespace="lab",task_queue="lab_go",le="0.2"}'
+        values: '0+0x40'
+      - series: 'temporal_activity_schedule_to_start_latency_seconds_count{namespace="lab",task_queue="lab_go"}'
+        values: '0+500x40'
+      - series: 'workflow_success{namespace="default",instance="temporal:8000"}'
+        values: '0+50x40'
+      - series: 'workflow_failed{namespace="lab",instance="temporal:8000"}'
+        values: '0+50x40'
+    promql_expr_test:
+      - expr: slo:sli_bad:ratio_rate5m{sli="worker_task_delivery"}
+        eval_time: 30m
+        exp_samples:
+          - labels: 'slo:sli_bad:ratio_rate5m{sli="worker_task_delivery"}'
+            value: 0
+      - expr: slo:sli_bad:ratio_rate5m{sli="workflow_completion"}
+        eval_time: 30m
+        exp_samples:
+          - labels: 'slo:sli_bad:ratio_rate5m{sli="workflow_completion"}'
+            value: 0

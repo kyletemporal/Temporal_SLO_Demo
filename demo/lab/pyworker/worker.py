@@ -42,7 +42,9 @@ from labworkflow import LabWorkflow
 LANE = os.environ.get("LANE", "python")
 CONTROLLER = os.environ.get("CONTROLLER_URL", "http://lab-controller:8095")
 TEMPORAL = os.environ.get("TEMPORAL_ADDRESS", "temporal:7233")
-NAMESPACE = os.environ.get("TEMPORAL_NAMESPACE", "default")
+# The lab runs in its own Namespace so its deliberate bottlenecks never spend
+# the demo app's SLO budgets (see labNamespace in ../controller.go).
+NAMESPACE = os.environ.get("TEMPORAL_NAMESPACE", "lab")
 WORKER_ID = f"{LANE}-{socket.gethostname()}"
 STARTED_AT = datetime.now(timezone.utc).isoformat()
 WINDOW = 10.0  # seconds, matches latencyWindow in telemetry.go

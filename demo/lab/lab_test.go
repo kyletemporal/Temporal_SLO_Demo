@@ -1,6 +1,8 @@
 package main
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -144,5 +146,32 @@ func TestAggregatorSwapAndPercentiles(t *testing.T) {
 	a.record("act_exec", time.Millisecond)
 	if c, _, _ = a.snapshot(); c["act_completed"] != 1 {
 		t.Fatalf("timer count not mirrored to act_completed: %v", c)
+	}
+}
+
+// Mutating endpoints must refuse anything a cross-site page can send without
+// a CORS preflight: GET, and POST with a form or text Content-Type.
+func TestMutatingGuard(t *testing.T) {
+	called := false
+	h := mutating(func(w http.ResponseWriter, r *http.Request) { called = true })
+	for _, c := range []struct {
+		method, ct string
+		want       int
+	}{
+		{http.MethodGet, "", http.StatusMethodNotAllowed},
+		{http.MethodPost, "application/x-www-form-urlencoded", http.StatusUnsupportedMediaType},
+		{http.MethodPost, "text/plain", http.StatusUnsupportedMediaType},
+		{http.MethodPost, "application/json", http.StatusOK},
+	} {
+		called = false
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(c.method, "/api/burst?lane=go&n=2000", nil)
+		if c.ct != "" {
+			req.Header.Set("Content-Type", c.ct)
+		}
+		h(rec, req)
+		if rec.Code != c.want || called != (c.want == http.StatusOK) {
+			t.Errorf("%s %q: code %d called %v, want %d", c.method, c.ct, rec.Code, called, c.want)
+		}
 	}
 }
