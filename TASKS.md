@@ -201,6 +201,60 @@ same query returns 51 and 40 series. The server was emitting them on
 `/metrics` before Prometheus had them, which is what ruled out a scrape-config
 drop.
 
+## Added 2026-09-29 → 2026-10-14
+
+**Merged to main:** #5 (AI agent observability), #6 (worker scale harness),
+#9 (self-hosted Temporal 1.28 on EKS + RDS PostgreSQL, `aws/eks-selfhosted/`,
+with `scripts/cloudshell.sh` for a no-install deploy from AWS CloudShell).
+
+**EKS self-hosted (`aws/eks-selfhosted/`).** Terraform (VPC, EKS 1.36, RDS
+PostgreSQL 16) and Helm (chart 0.67.0, server 1.28.4, kube-prometheus-stack
+with `production/` rules and dashboards) are kept as **separate layers** on
+purpose. History shards default to 512, and `deploy.sh` refuses to change them
+on an existing cluster. The Helm layer was verified end to end on kind against
+a Postgres set up like RDS. **Never applied to AWS**, because no credentials
+were available. Issue #8 stays open until the first real apply.
+
+**Worker tuning lab (`demo/lab/`, PR #10, open).** `make lab` serves
+http://localhost:8095, a live UI over real Go and Python Workers. Pollers,
+slots, sticky cache, CPUs and the Activity profile can all change at runtime.
+A diagnosis line is pinned by `lab_test.go` to the cases measured on the live
+stack: slot-, poller-, CPU-, GIL-, downstream- and **server-bound**, plus cache
+thrash. Findings are in `demo/lab/README.md`. The two that matter most:
+- **Poll latency separates poller-bound (2–16 ms) from server-bound (0.6–1.0 s).**
+- **A server at 240% CPU was not the bottleneck.** Raising pollers from 4 to 16
+  cut a 4.4 s wait to 84 ms.
+
+`make lab-slow-db` / `make lab-fast-db` reproduce server-bound by capping
+Postgres CPU.
+
+## Pick up here
+
+1. **Review and merge PR #10** (tuning lab). The branch `tuning-lab` has the
+   server-bound check committed.
+2. **First real EKS deploy** from AWS CloudShell: `bash cloudshell.sh up`. Check
+   the vCPU quota first (it needs 12 or more). A passing `smoke-test.sh` closes #8.
+   It costs about $1/hour until `bash cloudshell.sh down`.
+3. **PR #7 (transfer prep) is still in draft.** Five transfer-placeholder decisions
+   are waiting on their owners: support posture ×2, disclosure policy, code of
+   conduct, CODEOWNERS.
+4. **Validator fragility (existing, not from the lab).** The worker-scale
+   "Offered load vs throughput" panel sums `temporal_workflow_failed_total`. That
+   metric doesn't exist until some Workflow has failed, so a fresh stack fails
+   `make validate` (37/1/6) until a failure happens. The fix is `or vector(0)`
+   on that term, in `tools/generate_scale_dashboard.py`.
+5. **Lab follow-ups:**
+   - Kubernetes manifests, so the lab runs against the EKS cluster.
+   - Workers per lane can only be scaled with `--scale`, not from the UI.
+   - The Python lab Worker isn't in Prometheus. Its SDK exports to one
+     destination, and here that's the lab.
+6. **EKS follow-up:** deploy `monitor/` in-cluster. Two `production/` recording
+   rules stay empty without it.
+
+Local state: the demo stack is **stopped** (containers kept). Postgres carries
+`--cpus 18` from `make lab-fast-db`, which is no limit in practice; it goes away
+on the next recreate.
+
 ## In flight
 
 Nothing. The self-serve observability module listed here previously was
