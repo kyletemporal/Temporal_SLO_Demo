@@ -115,9 +115,9 @@ resource "terraform_data" "namespace" {
     when    = destroy
     command = "bash ${self.input.script} delete"
     environment = {
-      TF_NAME             = self.input.name
-      TF_ADDRESS          = self.input.address
-      TF_ALLOW_DESTROY    = tostring(self.input.allow_destroy)
+      TF_NAME          = self.input.name
+      TF_ADDRESS       = self.input.address
+      TF_ALLOW_DESTROY = tostring(self.input.allow_destroy)
     }
   }
 }
@@ -219,7 +219,7 @@ check "retention_matches" {
           name,
           data.external.current[name].result.retention_seconds,
           local.retention_seconds[name],
-          cfg.retention)
+        cfg.retention)
         if data.external.current[name].result.exists == "true" &&
       tonumber(data.external.current[name].result.retention_seconds) != local.retention_seconds[name]],
       ["", "Apply to reconcile. If the cluster value is the correct one, update the config instead."]
