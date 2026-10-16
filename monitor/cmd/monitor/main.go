@@ -27,10 +27,10 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.temporal.io/sdk/client"
 
-	"github.com/temporal-slo-demo/monitor/internal/config"
-	"github.com/temporal-slo-demo/monitor/internal/counter"
-	"github.com/temporal-slo-demo/monitor/internal/metrics"
-	"github.com/temporal-slo-demo/monitor/internal/monitor"
+	"github.com/temporalio/temporal-slo-demo/monitor/internal/config"
+	"github.com/temporalio/temporal-slo-demo/monitor/internal/counter"
+	"github.com/temporalio/temporal-slo-demo/monitor/internal/metrics"
+	"github.com/temporalio/temporal-slo-demo/monitor/internal/monitor"
 )
 
 func main() {

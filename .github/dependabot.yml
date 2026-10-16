@@ -1,0 +1,55 @@
+# Dependabot.
+#
+# This exists because of a real miss: google.golang.org/grpc sat at a version
+# with a reachable remote-OOM advisory (GO-2026-6348) in BOTH Go modules, on the
+# transport every Temporal SDK call goes through. It was found by a manual
+# govulncheck run weeks later. grpc is an INDIRECT dependency here — nothing in
+# this repo asks for it by name — which is exactly the kind nobody thinks to
+# check by hand. See SECURITY.md P8b.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /demo/app
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      # One PR for the routine patch churn, individual PRs for majors — which
+      # are the ones that actually need a human to look at the changelog.
+      patch-and-minor:
+        update-types: [minor, patch]
+
+  - package-ecosystem: gomod
+    directory: /monitor
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      patch-and-minor:
+        update-types: [minor, patch]
+
+  - package-ecosystem: pip
+    directory: /demo/agent-python
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+
+  - package-ecosystem: docker
+    directory: /demo/app
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: docker
+    directory: /monitor
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: docker
+    directory: /demo/agent-python
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

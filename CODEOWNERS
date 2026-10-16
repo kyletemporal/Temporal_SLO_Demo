@@ -1,0 +1,26 @@
+# CODEOWNERS
+#
+# REPLACE_ME(codeowners): every entry below is a placeholder. Replace with the
+# real Temporal team handles before enabling branch protection — an unresolvable
+# team in this file silently assigns nobody, which looks like review coverage
+# and is not. Do not ship with placeholder handles.
+#
+# Path order matters: the LAST matching pattern wins.
+
+# Default owner for anything not matched below.
+*                               @temporalio/REPLACE_ME-team
+
+# Security posture, risk register and disclosure policy.
+/SECURITY.md                    @temporalio/REPLACE_ME-security
+/CODE_OF_CONDUCT.md             @temporalio/REPLACE_ME-team
+/SUPPORT.md                     @temporalio/REPLACE_ME-team
+/LICENSE                        @temporalio/REPLACE_ME-team
+
+# Generated artefacts. Changes here are usually a sign someone edited the
+# output instead of the generator — see CONTRIBUTING.md.
+/demo/grafana/dashboards/       @temporalio/REPLACE_ME-team
+/tools/                         @temporalio/REPLACE_ME-team
+
+# Infrastructure-as-code touching real accounts.
+/terraform/                     @temporalio/REPLACE_ME-team
+/aws/                           @temporalio/REPLACE_ME-team

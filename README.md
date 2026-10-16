@@ -49,6 +49,21 @@ Read it before adapting `demo/`.
 
 ## Support and licence
 
+<!-- REPLACE_ME(support-posture): This paragraph was written while the repo was
+     personally owned and says outright that it is NOT a Temporal product. Under
+     Temporal ownership that is no longer the right statement, and the
+     replacement is a decision for whoever owns developer relations and support
+     policy — not a wording tweak. Pick one:
+       (a) Supported product — remove this section, point at the real support
+           channels, and expect support tickets.
+       (b) Official sample, best effort — "maintained by Temporal, no SLA,
+           issues welcome on this repo, not via support tickets."
+       (c) Official but explicitly unsupported — closest to today's text, but
+           say "Temporal publishes this as-is" rather than "not a Temporal
+           product", which will read as false once the org owns it.
+     The same decision governs SECURITY.md §6. Do not ship with this comment
+     still present. -->
+
 **This is a community resource, not a Temporal-supported product.** It is not
 covered by any Temporal support agreement or SLA, and issues with it should not
 be raised as Temporal support tickets. Temporal's own community dashboards carry
@@ -73,6 +88,12 @@ TypeScript, Python and .NET emit milliseconds, and getting it wrong is a silent
 1000x error.
 
 Licensed under the [MIT Licence](LICENSE).
+
+**Contributing:** [`CONTRIBUTING.md`](CONTRIBUTING.md) — the three rules that
+matter most are *edit the generator not the JSON*, *never load `demo/` and
+`production/` into one Prometheus*, and *claims in docs are measured, not
+assumed*. Getting help: [`SUPPORT.md`](SUPPORT.md). Conduct:
+[`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md).
 
 ## Try it in one command
 

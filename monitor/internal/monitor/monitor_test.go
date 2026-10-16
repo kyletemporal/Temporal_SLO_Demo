@@ -13,8 +13,8 @@ import (
 	dto "github.com/prometheus/client_model/go"
 	"go.temporal.io/api/serviceerror"
 
-	"github.com/temporal-slo-demo/monitor/internal/config"
-	"github.com/temporal-slo-demo/monitor/internal/metrics"
+	"github.com/temporalio/temporal-slo-demo/monitor/internal/config"
+	"github.com/temporalio/temporal-slo-demo/monitor/internal/metrics"
 )
 
 // fakeCounter answers by matching substrings of the query, so tests express

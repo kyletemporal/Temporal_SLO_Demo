@@ -52,7 +52,7 @@ A rule that parses can still return empty. Query live data before believing it.
 ## Validation
 
 ```bash
-cd demo && make validate            # 37 checks: containers, targets, rules, panels, SLOs, logs, trace links
+cd demo && make validate            # containers, targets, rules, panels, SLOs, logs, trace links, agent contract parity
 cd demo && make verify-sdk-labels   # confirms alerts match YOUR SDK's labels and units
 cd monitor && go test ./...
 cd terraform && terraform fmt -check -recursive

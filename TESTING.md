@@ -10,7 +10,7 @@ the "not verified" list before filing anything — some of it is already known.
 ```bash
 cd demo
 ./deploy.sh --clean      # ~5 min on first build
-make validate            # 37 checks: containers, targets, rules, every panel, SLOs, trace links
+make validate            # containers, targets, rules, every panel, SLOs, trace links, agent parity
 ```
 
 `make validate` should end `passed: 37  failed: 0`. If it does not, that is the

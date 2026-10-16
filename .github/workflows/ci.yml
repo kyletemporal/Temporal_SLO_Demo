@@ -1,0 +1,279 @@
+# Static checks. Everything here runs WITHOUT the compose stack.
+#
+# The live end-to-end suite (demo/scripts/validate.sh) is deliberately not here:
+# it needs 14 containers, several minutes of generated traffic, and it asserts
+# on measured values. That belongs in a scheduled or manually-dispatched job
+# against a real environment, not on every push — a flaky required check is one
+# people learn to bypass. What IS here is everything that can fail
+# deterministically.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: Go (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # demo/lab arrives with PR #10. Steps skip a module that is not on the
+        # branch yet, so merge order does not matter.
+        module: [demo/app, demo/lab, monitor]
+    steps:
+      - uses: actions/checkout@v4
+      - id: present
+        run: |
+          if [ -f "${{ matrix.module }}/go.mod" ]; then echo "yes=true" >> "$GITHUB_OUTPUT"
+          else echo "::notice::${{ matrix.module }} is not on this branch; skipping"; fi
+      - if: steps.present.outputs.yes == 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ matrix.module }}/go.mod
+          cache-dependency-path: ${{ matrix.module }}/go.sum
+      - name: build, vet, test, gofmt
+        if: steps.present.outputs.yes == 'true'
+        working-directory: ${{ matrix.module }}
+        run: |
+          go build -o /dev/null ./...
+          go vet ./...
+          go test -race ./...
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "not gofmt'd:"; echo "$unformatted"; exit 1
+          fi
+
+  govulncheck:
+    name: govulncheck (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [demo/app, demo/lab, monitor]
+    steps:
+      - uses: actions/checkout@v4
+      - id: present
+        run: '[ -f "${{ matrix.module }}/go.mod" ] && echo "yes=true" >> "$GITHUB_OUTPUT" || true'
+      - if: steps.present.outputs.yes == 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ matrix.module }}/go.mod
+      - name: govulncheck — blocking for third-party modules
+        if: steps.present.outputs.yes == 'true'
+        working-directory: ${{ matrix.module }}
+        # A reachable advisory in a THIRD-PARTY module is closed by `go get`
+        # today, so it fails the build (SECURITY.md P8b, and the x/net findings
+        # fixed in P8). Standard-library findings follow the toolchain's release
+        # schedule and are reported but do not fail — a new Go advisory would
+        # otherwise turn every unrelated PR red overnight.
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./... || true
+          govulncheck -format json ./... > vuln.json || true
+          python3 - <<'EOF'
+          import json, sys
+          dec = json.JSONDecoder(); text = open("vuln.json").read(); i = 0; bad = set()
+          while i < len(text):
+              text_i = text[i:].lstrip()
+              if not text_i: break
+              obj, n = dec.raw_decode(text_i); i = len(text) - len(text_i) + n
+              f = obj.get("finding")
+              # Reachable = the trace reaches a function, not just a module.
+              if f and f.get("trace") and f["trace"][0].get("function"):
+                  mod = f["trace"][0].get("module", "")
+                  if mod != "stdlib":
+                      bad.add((f["osv"], mod))
+          for osv, mod in sorted(bad):
+              print(f"::error::reachable {osv} in third-party module {mod}")
+          sys.exit(1 if bad else 0)
+          EOF
+
+  generators:
+    name: Dashboards match their generators
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: regenerate and diff
+        # The repo rule is "edit the generator, not the JSON" (CONTRIBUTING.md).
+        # Nothing enforced it, and hand-edits to generated dashboards are
+        # silently reverted on the next run. This turns that into a failure at
+        # review time instead of a surprise later.
+        run: |
+          for g in tools/generate_*.py; do
+            echo "== $g"; python3 "$g" || exit 1
+          done
+          # The DEMO golden-signals board needs its path AND the post-processor,
+          # in this order (CLAUDE.md). Without the argument the generator writes
+          # only the production board, so the demo board — the largest
+          # generated file — was never checked.
+          python3 tools/generate_golden_signals.py demo/grafana/dashboards/slo/temporal-golden-signals.json
+          python3 tools/add_poll_outcome_panels.py
+          python3 tools/generate_visibility_rules.py --check
+          if ! git diff --quiet; then
+            echo
+            echo "Generated output differs from what is committed."
+            echo "Run the generators and commit the result:"
+            git diff --stat
+            exit 1
+          fi
+
+  shell:
+    name: Shell syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: bash -n every script
+        run: |
+          fail=0
+          while IFS= read -r f; do
+            bash -n "$f" || { echo "syntax error: $f"; fail=1; }
+          done < <(find . -name '*.sh' -not -path './.git/*')
+          exit $fail
+      - uses: ludeeus/action-shellcheck@master
+        continue-on-error: true
+        with:
+          severity: error
+
+  config:
+    name: YAML and JSON parse
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install pyyaml
+      - name: parse every YAML and JSON file
+        run: |
+          python3 - <<'EOF'
+          import json, pathlib, sys, yaml
+          bad = 0
+          for p in pathlib.Path('.').rglob('*'):
+              if '.git/' in str(p) or not p.is_file():
+                  continue
+              try:
+                  if p.suffix in ('.yml', '.yaml'):
+                      list(yaml.safe_load_all(p.read_text()))
+                  elif p.suffix == '.json':
+                      json.loads(p.read_text())
+                  else:
+                      continue
+              except Exception as e:
+                  print(f'FAIL {p}: {str(e)[:120]}'); bad += 1
+          print('parse failures:', bad)
+          sys.exit(1 if bad else 0)
+          EOF
+
+  promtool:
+    name: Prometheus rules
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: check every rule file
+        # -print0/xargs -0 rather than word-splitting a $(find) — the latter
+        # breaks on any path containing a space and silently passed the whole
+        # list as ONE argument when first tested.
+        run: |
+          find . \( -name '*rules*.yml' -o -name 'alerts.yml' \) \
+               -not -path './.git/*' -print0 \
+            | xargs -0 docker run --rm -i -v "$PWD:/w" -w /w \
+                --entrypoint promtool prom/prometheus:v3.1.0 check rules
+      - name: unit-test the rules (no-series cases, label joins)
+        # Syntax is not behaviour. These assert the alerts FIRE in the cases
+        # that matter — a total outage with no success series, label sets that
+        # only join after aggregation — which `check rules` cannot see.
+        run: |
+          if [ -x tests/promql/run.sh ]; then tests/promql/run.sh
+          else echo "::notice::tests/promql not on this branch yet (PR #11)"; fi
+
+  terraform:
+    name: Terraform
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+      - name: fmt
+        run: terraform fmt -check -recursive
+      - name: validate every root module
+        # Every directory holding .tf files outside modules/ is a root,
+        # including nested ones. The documented `for d in patterns/*/` loop
+        # passed VACUOUSLY on 04-split-ownership, whose roots are one level
+        # deeper (platform/, team-orders/) — validate in a dir with no .tf
+        # files reports Success.
+        run: |
+          fail=0
+          for d in $(find terraform aws -name '*.tf' -not -path '*/.terraform/*' -not -path '*/modules/*' -exec dirname {} \; | sort -u); do
+            echo "== $d"
+            (cd "$d" && terraform init -backend=false -input=false >/dev/null && terraform validate) || fail=1
+          done
+          exit $fail
+      - name: terraform test (mocked AWS provider)
+        working-directory: aws/eks-selfhosted/terraform
+        run: |
+          if [ -d tests ]; then terraform init -backend=false -input=false >/dev/null && terraform test; fi
+
+  parity:
+    name: Go/Python GenAI contract parity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: test_parity.py
+        working-directory: demo/agent-python
+        run: |
+          pip install --quiet -r requirements.txt
+          python3 test_parity.py
+
+  hygiene:
+    name: Repository hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: no unresolved transfer placeholders
+        # These mark decisions that must be made before the repo is published
+        # under the org — support posture, disclosure routing, CODEOWNERS
+        # handles. Failing here is the point: they must not ship silently.
+        # Excludes this workflow file, which necessarily contains the marker
+        # it searches for — without that the gate fails on itself forever.
+        run: |
+          if grep -rn "REPLACE_ME(" --include='*.md' --include='*.yml' \
+               --include='CODEOWNERS' . \
+             | grep -v '.git/' \
+             | grep -v '^./.github/workflows/ci.yml:'; then
+            echo
+            echo "Unresolved transfer placeholders above. See TRANSFER.md."
+            exit 1
+          fi
+      - name: no committed binaries
+        run: |
+          fail=0
+          while IFS= read -r f; do
+            if file --mime "$f" | grep -q 'charset=binary'; then
+              echo "committed binary: $f ($(du -h "$f" | cut -f1))"; fail=1
+            fi
+          done < <(git ls-files)
+          exit $fail
+      - name: no obvious secrets or customer identifiers
+        run: |
+          if grep -rnE '(sk-ant-[A-Za-z0-9_-]{20,}|sk-proj-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY|[a-z0-9-]+\.tmprl\.cloud)' \
+               --include='*.md' --include='*.go' --include='*.yml' --include='*.yaml' \
+               --include='*.tf' --include='*.json' --include='*.sh' --include='*.py' . \
+             | grep -v '.git/'; then
+            echo
+            echo "Possible secret or real Temporal Cloud host above."
+            exit 1
+          fi

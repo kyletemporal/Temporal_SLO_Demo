@@ -14,10 +14,10 @@ Tasks that History must persist before Matching can dispatch them. Every
 *segment* of that path is instrumented. The transition **from the RPC into the
 task queue** is not.
 
-This started as a question from Kevin Woo — whether the absence of a
-Worker→Server task acceptance metric was a real visibility gap or just something
-he could not find. It is real, but narrower and more specific than "no metric
-exists", which is why it was worth measuring before filing.
+This started as an internal question — whether the absence of a Worker→Server
+task acceptance metric was a real visibility gap or just something hard to
+find. It is real, but narrower and more specific than "no metric exists", which
+is why it was worth measuring before filing.
 
 ## What already exists
 

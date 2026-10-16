@@ -1,11 +1,14 @@
 # TASKS
 
-Status as of 2026-08-24.
+Status as of 2026-09-28.
 
 ## Done
 
-**Demo stack** — runs on `temporalio/auto-setup` 1.27.4 (customer's version), every
-image tag parameterised. `make validate` passes **37/37, 0 warnings**.
+**Demo stack** — runs on `temporalio/auto-setup` 1.27.4, every image tag
+parameterised so it can be re-pointed at any server version. `make validate`
+passes — **46 passed, 0 failed, 1 warning** as measured on 2026-09-28. The count
+moves with what has been exercised (agent panels WARN until an agent has run),
+so treat the exit code as the gate, not the number.
 
 **Chaos scenarios (8)** — backlog, failures, orphan queue, slot saturation, worker
 blackout, **stuck workflows**, **non-determinism**, **poller flood**. The last two were the gaps:
@@ -42,7 +45,7 @@ the datasource's trace→logs and trace→profile links — to the home page. Fi
 with `GF_USERS_VIEWERS_CAN_EDIT`. `validate.sh` §9 now checks the permission and
 re-runs every button's query; negative-tested against a clean Grafana.
 
-**`SECURITY.md`** — 19 findings, no Critical, no committed secrets. Two High,
+**`SECURITY.md`** — 19 findings, no Critical, no committed secrets. (P8b took it to 20 on 2026-09-28.) Two High,
 both demo-only and accepted with mitigations: the Docker socket in Alloy (`:ro`
 does *not* make the Docker API read-only) and 14 unauthenticated published ports.
 `govulncheck` against the toolchain the images actually build with: 6 reachable
@@ -140,6 +143,23 @@ image now carries. It failed with `ModuleNotFoundError` on any host that had
 not installed them, which is most hosts, since the whole point of that image is
 that nobody has to.
 
+## Added 2026-09-28
+
+**P8b — a reachable gRPC vulnerability, found and fixed.** A `govulncheck`
+re-run turned up [GO-2026-6348](https://pkg.go.dev/vuln/GO-2026-6348): heap
+memory exhaustion via HTTP/2 DATA frame fragmentation in
+`google.golang.org/grpc`, reachable on **15 call paths in `demo/app`** and from
+`monitor/internal/counter/counter.go:55` — the gRPC transport every Temporal
+SDK call goes through. Both modules bumped to **v1.83.1**; build, vet and tests
+pass in both; the re-scan is clean of it.
+
+It also falsifies a claim SECURITY.md was making: that nothing reachable lived
+outside the standard library. `grpc` is an **indirect** dependency in both
+`go.mod` files — nothing here asks for it by name, nothing pins it, and it rode
+into `demo/app` at v1.83.0 behind an unrelated OTel exporter added by the agent
+work. Unlike the P8 stdlib set this one is fixable *in* the repo, with no
+toolchain change and no base-image rebuild.
+
 ## Verified live 2026-09-28
 
 The agent + scale work is now verified against a running stack, not just
@@ -226,17 +246,20 @@ routing. Rules route directly via `notification_settings.contact_point`.
    inside a **text-panel** `href`. If it does not, the links still open Explore
    but land on the default time range instead of the dashboard's.
 3. **Confirm the NDE label on non-Go SDKs.** `failure_reason` is verified on Go
-   + tally only. If the customer's teams run Java/TS/Python, that critical alert
-   may be silently dead — `make verify-sdk-labels` is the tool, but it needs
-   running on their workers.
+   + tally only. On a fleet running Java/TS/Python that critical alert may be
+   silently dead — `make verify-sdk-labels` is the tool, but it has to run
+   against those Workers to prove it.
 4. **Apply the `aws/` manifests to a real EKS cluster.** Karpenter and the HPA
    are written against verified APIs and parse cleanly; neither has been
    applied. The Karpenter setting most likely to need tuning is
    `consolidationPolicy` — watch `temporal_activity_execution_failed_total`
    after a scale-down.
-5. **Rebuild images once go1.25.13 is published** to clear the 10 stdlib
-   vulnerabilities in `SECURITY.md` P8. `golang:1.25-alpine` is a floating tag,
-   so `docker compose build --no-cache` picks it up with no file change.
+5. **Rebuild images to clear the stdlib vulnerabilities** in `SECURITY.md` P8
+   (10 reachable across the two modules). `golang:1.25-alpine` is a floating
+   tag, so `docker compose build --no-cache` picks up the current patch release
+   with no file change. Re-scanned 2026-09-28 on the host's go1.26.5 — same counts, fix
+   version now go1.26.6. The image's own numbers are still unmeasured; the scan
+   needs Docker.
 6. **Burn-rate ladder for duration SLOs** (optional). Not computable from the
    monitor's point-in-time gauges; would need short-window closed counts on the
    fast loop, roughly doubling Visibility query volume. Deliberate trade,
@@ -246,7 +269,7 @@ routing. Rules route directly via `notification_settings.contact_point`.
 
 **`task_accepted_latency`** — filed as
 [temporalio/temporal#11916](https://github.com/temporalio/temporal/issues/11916)
-on 2026-09-03, from a question by Kevin Woo.
+on 2026-09-03.
 
 No metric covers RPC receipt -> history task durably committed. Every segment of
 that path is instrumented and none of them start before task *generation*,
@@ -300,7 +323,7 @@ service and Temporal is the common migration target. What would earn its place:
 Both validate; neither has been applied. Remaining AWS items above are still open,
 with CloudWatch fan-out via the existing OTel Collector the most natural next one.
 
-## Open questions for the customer
+## Open questions for adopters
 
 - **Sampling strategy for traces.** `AlwaysSample` is right for the lab and wrong
   for production. Head sampling drops slow executions at the same rate as fast
@@ -309,4 +332,4 @@ with CloudWatch fan-out via the existing OTel Collector the most natural next on
   backend's retention. Tempo here keeps 24h.
 - **Who owns thresholds?** The self-serve module deliberately makes them
   platform-owned so a team must have a conversation to change them. Confirm that
-  matches how they want to operate.
+  matches how your organisation wants to operate.
