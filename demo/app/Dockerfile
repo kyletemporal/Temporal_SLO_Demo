@@ -1,6 +1,7 @@
 # The builder tag has to keep pace with the Temporal SDK's minimum Go version.
-# go.mod pins no dependency versions (see the comment there), so `go mod tidy`
-# always resolves the current SDK — and the alpine images set
+# Dependencies ARE pinned (go.mod + go.sum; `make deps-refresh` moves them on
+# purpose), but their minimum Go version still sets this tag's floor — and the
+# alpine images set
 # GOTOOLCHAIN=local, which means a too-old builder fails outright rather than
 # silently downloading a newer toolchain. If the build dies with
 # "toolchain upgrade needed", bump this tag; that is the intended fix.

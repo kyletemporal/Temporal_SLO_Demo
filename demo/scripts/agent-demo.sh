@@ -30,9 +30,13 @@ if [ "$PROVIDER" != "mock" ]; then
   sleep 5
 fi
 
+# HTTP error statuses are fine here — the error-path runs exist to produce
+# them. A curl FAILURE (API down, connection refused) is not: it used to be
+# swallowed by `|| true`, so a dead API still ended with "done".
+unreachable=0
 post() {
   curl -s --max-time 120 -X POST "$API/agent" \
-    -H 'content-type: application/json' -d "$1" >/dev/null || true
+    -H 'content-type: application/json' -d "$1" >/dev/null || unreachable=$((unreachable + 1))
 }
 
 echo "==> $RUNS agent runs via provider '$PROVIDER'"
@@ -68,6 +72,11 @@ done
 #    Keeping it in the demo means the regression cannot come back unnoticed.
 echo "    [4/4] provider misconfiguration (error path)"
 post "{\"prompt\":\"error path\",\"provider\":\"not-a-provider\"}"
+
+if [ "$unreachable" -gt 0 ]; then
+  echo "ERROR: $unreachable request(s) never reached $API — is the api service up? (make up)" >&2
+  exit 1
+fi
 
 echo
 echo "==> done. Allow ~15s for the collector's export interval, then open:"

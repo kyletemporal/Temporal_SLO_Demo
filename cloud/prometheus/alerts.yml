@@ -20,27 +20,32 @@ groups:
         # label, so SLA-excluded errors (NotFound, InvalidArgument, Throttling)
         # are counted here and cannot be filtered out. This will read worse
         # than Temporal's own SLA figure. See docs/SLA-AND-SLOS.md.
+        #
+        # Per Namespace, with a traffic floor. The previous form divided per
+        # OPERATION with no floor, so one error on an operation called a few
+        # times a minute read as a 50-100% error rate and paged. 0.33 req/s
+        # (~20/min) is the floor Temporal's docs give for Cloud's 1-minute
+        # aggregates to mean anything.
+        #
+        # 0.001 = alert below 99.9% success, Temporal's published guidance.
+        # (The comment this replaces justified the threshold with a measurement
+        # from the SELF-HOSTED demo and pointed at a "persistence rule below"
+        # that does not exist in this file — Cloud has no persistence metrics.)
         expr: |
-          avg_over_time(temporal_cloud_v1_service_error_count[5m])
-          /
-          clamp_min(avg_over_time(temporal_cloud_v1_service_request_count[5m]), 0.001)
-          # 0.001, not 0.01. Alerting below 99.9% success matches Temporal's
-          # published guidance (Joshua Smith, Temporal Cloud Observability, and
-          # the docs' "alert if success rate <99.9%"). The previous 1% threshold
-          # let a sustained 0.5% error rate — a real problem — go unpaged.
-          #
-          # Measured on the demo stack before tightening: actual frontend error
-          # ratio was 0.000000%, so this is quiet in steady state. Client-caused
-          # errors are already excluded from the persistence rule below for the
-          # same reason; if this proves chatty in your environment, find out WHICH
-          # error types before loosening it back.
-          > 0.001
+          (
+            sum by (temporal_namespace) (avg_over_time(temporal_cloud_v1_service_error_count[5m]))
+            /
+            clamp_min(sum by (temporal_namespace) (avg_over_time(temporal_cloud_v1_service_request_count[5m])), 0.001)
+            > 0.001
+          )
+          and
+          sum by (temporal_namespace) (avg_over_time(temporal_cloud_v1_service_request_count[5m])) > 0.33
         for: 10m
         labels:
           severity: page
           component: temporal-cloud
         annotations:
-          summary: "Temporal Cloud error rate above 1% in {{ $labels.temporal_namespace }}"
+          summary: "Temporal Cloud error rate above 0.1% in {{ $labels.temporal_namespace }}"
           description: "Check https://status.temporal.io first. If the status page is clean, look at your own error types — caller-caused errors land in this metric too and are usually a deploy."
 
       - alert: TemporalCloudResourceExhausted

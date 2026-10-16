@@ -1,9 +1,28 @@
 #!/usr/bin/env python3
 """Generate the Temporal SLO board dashboard."""
 import json
-
 import pathlib
-OUT = str(pathlib.Path(__file__).resolve().parent.parent / "demo/grafana/dashboards/slo/temporal-slo-board.json")
+import subprocess
+import sys
+
+# One board per bundle. The production copy was a hand copy of the demo board,
+# so it shipped the DEMO's "compliance window 1h" and queried
+# sli="worker_task_delivery" — an SLI that does not exist in production
+# (production's is task_delivery), leaving that panel permanently empty.
+VARIANTS = {
+    "demo": dict(out="demo/grafana/dashboards/slo/temporal-slo-board.json",
+                 window="1h", delivery="worker_task_delivery",
+                 title="Temporal SLO Board — Error Budgets", uid="temporal-slo-board"),
+    "production": dict(out="production/grafana/dashboards/temporal-slo-board.json",
+                       window="28d", delivery="task_delivery",
+                       title="Temporal SLO Board — Error Budgets (production)", uid="temporal-slo-board-prod"),
+}
+if len(sys.argv) == 1:
+    for _v in VARIANTS:
+        subprocess.run([sys.executable, __file__, _v], check=True)
+    sys.exit(0)
+V = VARIANTS[sys.argv[1]]
+OUT = str(pathlib.Path(__file__).resolve().parent.parent / V["out"])
 
 DS = {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}
 
@@ -105,7 +124,7 @@ panels = []
 # =====================================================================
 # ROW 1 — headline error budget status
 # =====================================================================
-panels.append(row("Error Budget — compliance window 1h", 0))
+panels.append(row(f"Error Budget — compliance window {V['window']}", 0))
 
 panels.append(panel(
     "stat", "SLOs in breach",
@@ -139,7 +158,7 @@ wall = panel(
           "GREEN  >25% of the budget left\n"
           "ORANGE 0-25% left — at risk, still meeting the SLO\n"
           "RED    budget spent; the SLO has been MISSED for this window\n\n"
-          "Saturates at -100%: on a 1h window a bad scenario can burn many times "
+          f"Saturates at -100%: on a {V['window']} window a bad scenario can burn many times "
           "the budget, and -7485% is noise. Once a tile is red the budget is "
           "gone; the burn rate panel tells you how fast and whether it is still "
           "happening.\n\n"
@@ -400,12 +419,12 @@ panels.append(panel(
 panels.append(panel(
     "timeseries", "Worker fleet & application SLIs",
     {"h": 9, "w": 12, "x": 12, "y": 43},
-    [target('1 - slo:sli_bad:ratio_rate5m{sli="worker_task_delivery"}',
+    [target('1 - slo:sli_bad:ratio_rate5m{sli="%s"}' % V["delivery"],
             legend="Activity Tasks started within 200ms"),
      target('1 - slo:sli_bad:ratio_rate5m{sli="workflow_completion"}',
             legend="Workflows completing successfully", ref="B")],
     unit="percentunit",
-    desc=("worker_task_delivery is an SDK metric and disappears entirely when the "
+    desc=(f"{V['delivery']} is an SDK metric and disappears entirely when the "
           "Worker fleet is down — see TemporalWorkerFleetAbsent. "
           "workflow_completion comes from the history service, so it keeps "
           "reporting through a total Worker outage."),
@@ -461,8 +480,8 @@ dashboard = {
     "time": {"from": "now-1h", "to": "now"},
     "timepicker": {},
     "timezone": "browser",
-    "title": "Temporal SLO Board — Error Budgets",
-    "uid": "temporal-slo-board",
+    "title": V["title"],
+    "uid": V["uid"],
     "version": 1,
     "weekStart": "",
 }

@@ -311,7 +311,7 @@ fleet is silent by construction, so the only defence is reacting fast.
    distribution, then set the objective at a level you were already meeting.
 4. **Set `worker_task_delivery` from your own p99**, not from 200ms, if your
    Activities are naturally bursty.
-5. **Set duration budgets per Workflow type** in `monitor/slo-config.yaml`. The
+5. **Set duration budgets per Workflow type** in your monitor config (start from `monitor/slo-config.demo.yaml`). The
    60s default is only right for short synchronous work.
 6. **Move the compliance window to 28d** and raise Prometheus retention to match.
 7. **Add host CPU** (node_exporter or cAdvisor). It is not a Temporal metric, and

@@ -19,7 +19,7 @@
   "panels": [
     {
       "type": "row",
-      "title": "Error Budget \u2014 compliance window 1h",
+      "title": "Error Budget \u2014 compliance window 28d",
       "gridPos": {
         "h": 1,
         "w": 24,
@@ -150,7 +150,7 @@
         },
         "overrides": []
       },
-      "description": "One tile per SLO, coloured by error budget remaining. Healthy is a wall of green; a single tile changing colour is the whole point.\n\nGREEN  >25% of the budget left\nORANGE 0-25% left \u2014 at risk, still meeting the SLO\nRED    budget spent; the SLO has been MISSED for this window\n\nSaturates at -100%: on a 1h window a bad scenario can burn many times the budget, and -7485% is noise. Once a tile is red the budget is gone; the burn rate panel tells you how fast and whether it is still happening.\n\nRead the number, not just the colour: green vs orange is close to indistinguishable for red-green colourblind viewers (protan \u0394E 5.6), so the signed percentage is the reliable channel. Negative means breached.",
+      "description": "One tile per SLO, coloured by error budget remaining. Healthy is a wall of green; a single tile changing colour is the whole point.\n\nGREEN  >25% of the budget left\nORANGE 0-25% left \u2014 at risk, still meeting the SLO\nRED    budget spent; the SLO has been MISSED for this window\n\nSaturates at -100%: on a 28d window a bad scenario can burn many times the budget, and -7485% is noise. Once a tile is red the budget is gone; the burn rate panel tells you how fast and whether it is still happening.\n\nRead the number, not just the colour: green vs orange is close to indistinguishable for red-green colourblind viewers (protan \u0394E 5.6), so the signed percentage is the reliable channel. Negative means breached.",
       "options": {
         "reduceOptions": {
           "calcs": [
@@ -881,7 +881,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "1 - slo:sli_bad:ratio_rate5m{sli=\"worker_task_delivery\"}",
+          "expr": "1 - slo:sli_bad:ratio_rate5m{sli=\"task_delivery\"}",
           "range": true,
           "instant": false,
           "refId": "A",
@@ -910,7 +910,7 @@
         },
         "overrides": []
       },
-      "description": "worker_task_delivery is an SDK metric and disappears entirely when the Worker fleet is down \u2014 see TemporalWorkerFleetAbsent. workflow_completion comes from the history service, so it keeps reporting through a total Worker outage.",
+      "description": "task_delivery is an SDK metric and disappears entirely when the Worker fleet is down \u2014 see TemporalWorkerFleetAbsent. workflow_completion comes from the history service, so it keeps reporting through a total Worker outage.",
       "options": {
         "legend": {
           "displayMode": "table",

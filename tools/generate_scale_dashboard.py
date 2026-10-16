@@ -45,6 +45,7 @@ TEMPORAL_INDIGO = "#444CE7"
 # aggregate carries activity unrelated to the offered load, and absence alerts
 # never fire.
 TEN = 'namespace=~"$namespace", namespace!~"temporal_system|system|_unknown_"'
+POLL = TEN + ', taskqueue!~"temporal_sys_.*"'
 
 # $role selects the FLEET: order Workers or agent Workers. They are separate
 # scrape jobs and must stay separately selectable — a blended figure is
@@ -119,7 +120,9 @@ P.append({
 </div>'''}})
 
 P.append(stat("Workers polling", {"h": 5, "w": 4, "x": 3, "y": 0},
-    [tgt(f'count(up{{{FLEET}}} == 1)')],
+    # `or vector(0)`: count() of nothing is NO DATA, so with every Worker
+    # down this stat read "No data" instead of 0 — exactly when it matters.
+    [tgt(f'count(up{{{FLEET}}} == 1) or vector(0)')],
     "short",
     "Worker processes Prometheus is currently scraping.\n\n"
     "Discovered by dns_sd against the Compose service name, so it tracks "
@@ -144,7 +147,7 @@ P.append(stat("Throughput", {"h": 5, "w": 4, "x": 7, "y": 0},
 
 P.append(stat("Throughput per worker", {"h": 5, "w": 4, "x": 11, "y": 0},
     [tgt(f'sum(rate(workflow_success{{{TEN}}}[$__rate_interval])) / '
-         f'clamp_min(count(up{{{FLEET}}} == 1), 1)')],
+         f'clamp_min(count(up{{{FLEET}}} == 1) or vector(0), 1)')],
     "reqps",
     "Completions per second divided by the number of Workers actually scraped.\n\n"
     "THE NUMBER THAT TELLS YOU WHETHER ANOTHER WORKER IS WORTH BUYING. Watch it "
@@ -203,7 +206,10 @@ P.append(ts("Offered load vs throughput", {"h": 8, "w": 12, "x": 0, "y": 6},
          f'(sum(rate(workflow_timeout{{{TEN}}}[$__rate_interval])) or vector(0))',
          "terminated (all outcomes)"),
      tgt(f'sum(rate(workflow_success{{{TEN}}}[$__rate_interval]))', "succeeded", ref="B"),
-     tgt(f'sum(rate(temporal_workflow_failed_total{{{TEN}}}[$__rate_interval]))',
+     # `or vector(0)`: temporal_workflow_failed_total does not exist until
+     # the first failure, so on a healthy stack this target was empty and
+     # `make validate` failed the whole panel — every time, not flakily.
+     tgt(f'sum(rate(temporal_workflow_failed_total{{{TEN}}}[$__rate_interval])) or vector(0)',
          "SDK-observed failures", ref="C")],
     "reqps",
     "Work finishing, split by outcome. The gap between the top line and the offered "
@@ -277,11 +283,14 @@ P.append(ts("Activity slots available per worker", {"h": 8, "w": 12, "x": 0, "y"
     decimals=0, legend_mode="table", calcs=["min", "lastNotNull"]))
 
 P.append(ts("Sync match rate and poll success", {"h": 8, "w": 12, "x": 12, "y": 15},
-    [tgt('sum(rate(poll_success_sync[$__rate_interval])) / '
-         'clamp_min(sum(rate(poll_success[$__rate_interval])), 0.0001)', "sync match rate"),
-     tgt('sum(rate(poll_success[$__rate_interval])) / '
-         'clamp_min(sum(rate(poll_success[$__rate_interval])) + '
-         'sum(rate(poll_timeouts[$__rate_interval])), 0.0001)', "poll success rate", ref="B")],
+    # Scoped to tenant namespaces and away from temporal_sys_* queues, which
+    # long-poll constantly and match nothing (CLAUDE.md): unscoped, poll
+    # success sat permanently low and barely moved as the fleet grew.
+    [tgt(f'sum(rate(poll_success_sync{{{POLL}}}[$__rate_interval])) / '
+         f'clamp_min(sum(rate(poll_success{{{POLL}}}[$__rate_interval])), 0.0001)', "sync match rate"),
+     tgt(f'sum(rate(poll_success{{{POLL}}}[$__rate_interval])) / '
+         f'clamp_min(sum(rate(poll_success{{{POLL}}}[$__rate_interval])) + '
+         f'sum(rate(poll_timeouts{{{POLL}}}[$__rate_interval])), 0.0001)', "poll success rate", ref="B")],
     "percentunit",
     "Two server-side rates that move in OPPOSITE directions as the fleet grows, "
     "which is what makes them useful together.\n\n"

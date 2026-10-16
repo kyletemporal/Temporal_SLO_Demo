@@ -40,7 +40,10 @@ for c in "${expected[@]}"; do
     bad "$c is $status${health:+ / $health}"
   fi
 done
-wcount=$(docker ps --filter "name=worker" --filter "status=running" -q | wc -l | tr -d ' ')
+# By Compose SERVICE label, not container name: a "name=worker" filter is a
+# substring match, so agent-worker and lab-worker-* satisfied it and this
+# passed with every ORDER Worker down.
+wcount=$(docker ps --filter "label=com.docker.compose.service=worker" --filter "status=running" -q | wc -l | tr -d ' ')
 [ "$wcount" -ge 1 ] && ok "worker fleet: $wcount replica(s) running" \
                     || bad "worker fleet: no replicas running"
 

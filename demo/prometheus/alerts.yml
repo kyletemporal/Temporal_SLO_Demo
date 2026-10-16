@@ -33,7 +33,7 @@ groups:
           severity: warning
           component: temporal-frontend
         annotations:
-          summary: "Temporal Frontend error rate above 1%"
+          summary: "Temporal Frontend error rate above 0.1%"
           description: "Check the Frontend Errors by Type panel. ResourceExhausted points at rate limiting or an overloaded persistence layer; Internal/Unavailable points at cluster health."
 
       # The operation exclusion is what stops this alert firing forever.
@@ -66,7 +66,7 @@ groups:
       - alert: TemporalPersistenceErrors
         expr: |
           sum(rate(persistence_error_with_type{
-            error_type!~"serviceerror_(Canceled|NotFound|NamespaceNotFound|AlreadyExist.*|InvalidArgument|FailedPrecondition)"
+            error_type!~"serviceerror_(Canceled|NotFound|NamespaceNotFound|AlreadyExist.*|InvalidArgument|FailedPrecondition|WorkflowExecutionAlreadyStarted|QueryFailed)"
           }[5m])) > 0
         for: 5m
         labels:

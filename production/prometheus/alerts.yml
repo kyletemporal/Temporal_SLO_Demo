@@ -46,7 +46,7 @@ groups:
           severity: page
           component: temporal-frontend
         annotations:
-          summary: "Frontend error rate above 1% in {{ $labels.namespace }}"
+          summary: "Frontend error rate above 0.1% in {{ $labels.namespace }}"
           description: "ResourceExhausted points at rate limiting or an overloaded datastore; Internal/Unavailable points at cluster health. Check persistence latency first — it is upstream of most frontend symptoms."
 
       - alert: TemporalFrontendLatencyHigh
@@ -75,7 +75,7 @@ groups:
         # Client faults excluded for the same reason as above.
         expr: |
           sum by (service_name) (rate(persistence_error_with_type{
-            error_type!~"serviceerror_(Canceled|NotFound|NamespaceNotFound|AlreadyExist.*|InvalidArgument|FailedPrecondition)"
+            error_type!~"serviceerror_(Canceled|NotFound|NamespaceNotFound|AlreadyExist.*|InvalidArgument|FailedPrecondition|WorkflowExecutionAlreadyStarted|QueryFailed)"
           }[5m])) > 0
         for: 5m
         labels:
@@ -414,4 +414,4 @@ groups:
           component: temporal-application
         annotations:
           summary: "Non-determinism error in {{ $labels.workflow_type }} on {{ $labels.task_queue }}"
-          description: "Workflow code changed incompatibly with in-flight histories. These executions are stuck and retrying forever; they will not self-heal. Find the affected IDs in the logs — NDEs log with code TMPRL1100 and carry WorkflowID and RunID (see the 'Find stuck executions' panel). Fix forward with Worker Versioning; metrics alone can never name the executions."
+          description: "Workflow code changed incompatibly with in-flight histories. These executions are stuck and retrying forever; they will not self-heal. Find the affected IDs in the logs — NDEs log with code TMPRL1100 (deadlocks TMPRL1101) and carry WorkflowID and RunID — search your Worker logs for `TMPRL1100|TMPRL1101`. Fix forward with Worker Versioning; metrics alone can never name the executions."

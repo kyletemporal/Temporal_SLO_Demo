@@ -70,7 +70,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "count(up{job=~\"$role\"} == 1)",
+          "expr": "count(up{job=~\"$role\"} == 1) or vector(0)",
           "range": true,
           "instant": false,
           "refId": "A"
@@ -199,7 +199,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum(rate(workflow_success{namespace=~\"$namespace\", namespace!~\"temporal_system|system|_unknown_\"}[$__rate_interval])) / clamp_min(count(up{job=~\"$role\"} == 1), 1)",
+          "expr": "sum(rate(workflow_success{namespace=~\"$namespace\", namespace!~\"temporal_system|system|_unknown_\"}[$__rate_interval])) / clamp_min(count(up{job=~\"$role\"} == 1) or vector(0), 1)",
           "range": true,
           "instant": false,
           "refId": "A"
@@ -440,7 +440,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum(rate(temporal_workflow_failed_total{namespace=~\"$namespace\", namespace!~\"temporal_system|system|_unknown_\"}[$__rate_interval]))",
+          "expr": "sum(rate(temporal_workflow_failed_total{namespace=~\"$namespace\", namespace!~\"temporal_system|system|_unknown_\"}[$__rate_interval])) or vector(0)",
           "range": true,
           "instant": false,
           "refId": "C",
@@ -706,7 +706,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum(rate(poll_success_sync[$__rate_interval])) / clamp_min(sum(rate(poll_success[$__rate_interval])), 0.0001)",
+          "expr": "sum(rate(poll_success_sync{namespace=~\"$namespace\", namespace!~\"temporal_system|system|_unknown_\", taskqueue!~\"temporal_sys_.*\"}[$__rate_interval])) / clamp_min(sum(rate(poll_success{namespace=~\"$namespace\", namespace!~\"temporal_system|system|_unknown_\", taskqueue!~\"temporal_sys_.*\"}[$__rate_interval])), 0.0001)",
           "range": true,
           "instant": false,
           "refId": "A",
@@ -718,7 +718,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum(rate(poll_success[$__rate_interval])) / clamp_min(sum(rate(poll_success[$__rate_interval])) + sum(rate(poll_timeouts[$__rate_interval])), 0.0001)",
+          "expr": "sum(rate(poll_success{namespace=~\"$namespace\", namespace!~\"temporal_system|system|_unknown_\", taskqueue!~\"temporal_sys_.*\"}[$__rate_interval])) / clamp_min(sum(rate(poll_success{namespace=~\"$namespace\", namespace!~\"temporal_system|system|_unknown_\", taskqueue!~\"temporal_sys_.*\"}[$__rate_interval])) + sum(rate(poll_timeouts{namespace=~\"$namespace\", namespace!~\"temporal_system|system|_unknown_\", taskqueue!~\"temporal_sys_.*\"}[$__rate_interval])), 0.0001)",
           "range": true,
           "instant": false,
           "refId": "B",
