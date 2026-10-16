@@ -250,7 +250,12 @@ jobs:
         # Excludes this workflow file, which necessarily contains the marker
         # it searches for — without that the gate fails on itself forever.
         run: |
-          if grep -rn "REPLACE_ME(" --include='*.md' --include='*.yml' \
+          # Matches real markers only — REPLACE_ME(name), name a lowercase
+          # identifier. A bare "REPLACE_ME(" also matched PROSE about the
+          # markers ("five `REPLACE_ME(...)` decisions" in TASKS.md), which
+          # failed CI on PRs with no placeholders and would have forced
+          # TRANSFER.md's deletion just to pass.
+          if grep -rnE 'REPLACE_ME\([a-z][a-z-]*\)' --include='*.md' --include='*.yml' \
                --include='CODEOWNERS' . \
              | grep -v '.git/' \
              | grep -vE '^(\./)?\.github/workflows/ci\.yml:'; then
