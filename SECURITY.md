@@ -68,7 +68,7 @@ is out of scope by design; it is single-tenant by construction.
 | [P3](#p3) | **Medium** | repo | `*.tfvars` is not gitignored at the root; and the ignore rule that did exist silently dropped two files a pattern depends on | **Fixed** |
 | [P4](#p4) | **Medium** | `terraform/` | Terraform state stores Temporal API key tokens in plaintext | Open, documented |
 | [P5](#p5) | **Medium** | `aws/` | `external_id` (confused-deputy protection) is optional | Open, documented |
-| [P8](#p8) | **Medium** | Go | 6 reachable Go standard-library vulnerabilities | Open, upstream |
+| [P8](#p8) | **Medium** | Go | Reachable standard-library and `golang.org/x/net` vulnerabilities | **Fixed** 2026-10-16 (Go 1.26 builders, x/net v0.61.0) |
 | [D7](#d7) | Low | `demo/app`, `monitor/` | No `WriteTimeout`/`IdleTimeout` on HTTP servers | Open |
 | [D8](#d8) | Low | `demo/app` | pprof binds `0.0.0.0` inside the container | Open |
 | [D9](#d9) | Low | `demo/` | OTLP export is plaintext (`insecure: true`) | Open, by design |
@@ -444,6 +444,24 @@ with no file change. Verify with the scan command in §5. This is also the
 counter-argument to pinning that base image by digest (D10) — see the trade-off
 recorded there.
 
+**Fixed 2026-10-16 — measured, not assumed.** By then the picture had grown: a
+re-scan (host go1.26.5) found `demo/app` 17 stdlib + 5 `golang.org/x/net`, and
+`monitor` 13 stdlib + 4 `x/net` + 1 `google.golang.org/grpc` (GO-2026-6348,
+still at v1.82.1 on main). The `x/net` findings are third-party, so the claim
+above that nothing was reachable outside the standard library was no longer
+true.
+
+Rebuilding alone could not fix it. **Every fixed `x/net` release (v0.60.0+)
+declares `go 1.26.0`**, and the images built on `golang:1.25-alpine` with
+`GOTOOLCHAIN=local` — so bumping `x/net` without moving the builder breaks
+every image build. Both together:
+
+- `x/net` → v0.61.0 in `demo/app` and `monitor`; `grpc` → v1.83.1 in `monitor`
+- `go` directive → 1.26.0; builders → `golang:1.26-alpine` (go1.26.9)
+
+`govulncheck` inside `golang:1.26-alpine` (the images' own toolchain):
+**`demo/app` 0, `monitor` 0.** Images rebuilt and the stack re-verified.
+
 ---
 
 ### Low-severity findings
@@ -470,7 +488,7 @@ hosts.
 <a id="d10"></a>**D10 — Images pinned by tag, not digest.** All eleven images use
 `${VAR:-version}` tags. Tags are mutable, so a rebuild can silently pull
 different bytes. Deliberate: it is also what lets a rebuild pick up the Go
-1.25.13 fix in P8 without a code change. Digest-pin for production, keep tags
+patch release that fixes P8 without a code change. Digest-pin for production, keep tags
 for the lab, and if you digest-pin add a scanner to tell you when to move.
 
 <a id="p6"></a>**P6 — S3 controls not fully closed.** `aws/terraform/export-sink`
@@ -502,7 +520,7 @@ Ordered by consequence, not effort.
 - [ ] Encrypt and lock the Terraform state backend; restrict who can read it (P4).
 - [ ] Make `external_id` required on the export sink (P5).
 - [ ] Narrow the Nexus callback allow-list and disable insecure callbacks (D11).
-- [ ] Rebuild images to pick up go1.25.13 (P8), and re-run the scan.
+- [x] Move builders to Go 1.26 and bump `x/net`/`grpc` (P8). Done 2026-10-16; 0 reachable. Re-scan on every base-image move.
 - [ ] Decide your redaction policy for **logs** before shipping them to Loki. The collector redacts span payloads; nothing redacts log lines (D4).
 
 ---
@@ -515,7 +533,7 @@ Everything in §3 is reproducible. No proprietary tooling.
 local Go, which will report a different stdlib version:
 
 ```bash
-docker run --rm -v "$PWD":/src -w /src golang:1.25-alpine sh -c '
+docker run --rm -v "$PWD":/src -w /src golang:1.26-alpine sh -c '
   apk add --no-cache git >/dev/null
   go install golang.org/x/vuln/cmd/govulncheck@latest >/dev/null
   for m in demo/app monitor; do echo "== $m"; (cd $m && /go/bin/govulncheck ./...); done'

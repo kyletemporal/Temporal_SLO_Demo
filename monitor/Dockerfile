@@ -1,6 +1,6 @@
 # Go 1.25: go.mod declares 1.25.4, and an older toolchain fails to build rather
 # than degrading gracefully.
-FROM golang:1.25-alpine AS build
+FROM golang:1.26-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download

@@ -41,7 +41,7 @@ deps-refresh: ## Re-resolve Go dependencies to current versions (updates go.mod/
 	@echo "==> Re-resolving the module graph against current upstream versions."
 	@echo "    This can break the build — that is the point of doing it"
 	@echo "    deliberately, with a diff, rather than on every customer build."
-	docker run --rm -v "$(CURDIR)/app":/src -w /src golang:1.25-alpine \
+	docker run --rm -v "$(CURDIR)/app":/src -w /src golang:1.26-alpine \
 		sh -c 'apk add --no-cache git >/dev/null && go get -u ./... && go mod tidy'
 	docker compose build --no-cache api worker
 
