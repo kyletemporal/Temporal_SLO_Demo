@@ -104,9 +104,21 @@ Two poll loops, deliberately different cadences:
 | Fast | `poll_interval` 60s | stuck, age ladder, running baseline | cheap, bounded |
 | Window | `window_poll_interval` 600s | closed-in-budget / closed-over-budget across `slo_window` | expensive, 28d range |
 
-Types are staggered across each interval with jitter. `RESOURCE_EXHAUSTED`
-triggers exponential backoff. Floor of 30s enforced regardless of config —
-Visibility is rate-limited, hardest on Cloud.
+Queries run sequentially through one paced client (`pace` between queries),
+each bounded by a 20s deadline. **There is no staggering or jitter** — an earlier
+version of this document said there was, and the code never did it.
+`RESOURCE_EXHAUSTED` and `UNAVAILABLE` are retried once, inside the Go SDK's
+own gRPC interceptor; the monitor deliberately adds no second retry layer (it
+did, and one throttled query could then take ~65s). Floor of 30s enforced
+regardless of config — Visibility is rate-limited, hardest on Cloud.
+
+The window loop counts all three SLI terms — closed-in, closed-over, and open
+past 1x budget (`over_budget_executions_at_window_poll`) — at the **same
+instant**, and publishes them together or not at all. The fast loop's
+`over_budget_executions{bucket="1"}` is for alerting only. Mixing the two let a
+terminated over-budget execution leave the open term up to
+`window_poll_interval` before it entered the closed term, so terminating one
+briefly IMPROVED compliance — the exact thing §5 promises cannot happen.
 
 All counts come from **`CountWorkflowExecutions`**, never `ListWorkflowExecutions`.
 We want counts, not pages. (The one exception is budget derivation — see §7.)
@@ -146,10 +158,15 @@ slo:workflow_compliance:ratio28d =
       temporal_slo_closed_in_budget
     / ( temporal_slo_closed_in_budget
       + temporal_slo_closed_over_budget
-      + sum without(bucket) (temporal_slo_over_budget_executions{bucket="1"}) )
+      + temporal_slo_over_budget_executions_at_window_poll )
 ```
 
-**`sum without(bucket)` is not cosmetic.** `over_budget_executions` carries a
+All three terms are counted in the same window poll (see §4). An earlier
+version used the fast loop's `sum without(bucket) (over_budget_executions{bucket="1"})`
+for the third term; the two loops' different cadences let compliance rise
+briefly when an over-budget execution was terminated.
+
+**(Historical — the lesson still applies.) `sum without(bucket)` was not cosmetic** in the earlier form. `over_budget_executions` carries a
 `bucket` label that the two closed gauges do not, and Prometheus binary
 operators require identical label sets — so the obvious form of this expression
 (which this document published until it was run against a live stack) matches
@@ -321,8 +338,8 @@ current 1.27.4 one. I can validate the fallback end to end and the SA path only 
 construction. If you want it genuinely proven, add a 1.30+ dev server to the
 compose file for testing — it does not need to touch the 1.27.4 demo.
 
-Second gap: the demo has **one** workflow type, so multi-type staggering and
-jitter get unit tests rather than a real load test.
+Second gap: the demo has **one** workflow type, so multi-type query pacing is
+covered by unit tests rather than a real load test.
 
 ---
 

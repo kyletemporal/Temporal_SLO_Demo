@@ -1,0 +1,52 @@
+# promtool unit tests for the Workflow-SLO monitor rules (demo variant; the
+# production/cloud ones are generated from the same definition).
+rule_files:
+  - ../../demo/prometheus/monitor-rules.yml
+
+evaluation_interval: 1m
+
+tests:
+  # Terminating an over-budget execution moves it from the open term to
+  # closed_over_budget IN THE SAME POLL, so compliance does not change.
+  - interval: 1m
+    input_series:
+      - series: 'temporal_slo_closed_in_budget{workflow_type="OrderWorkflow",task_queue="orders"}'
+        values: '90x20'
+      - series: 'temporal_slo_closed_over_budget{workflow_type="OrderWorkflow",task_queue="orders"}'
+        values: '5x10 6x10'
+      - series: 'temporal_slo_over_budget_executions_at_window_poll{workflow_type="OrderWorkflow",task_queue="orders"}'
+        values: '5x10 4x10'
+    promql_expr_test:
+      - expr: slo:workflow_compliance:ratio
+        eval_time: 5m
+        exp_samples:
+          - labels: 'slo:workflow_compliance:ratio{workflow_type="OrderWorkflow",task_queue="orders"}'
+            value: 0.9
+      - expr: slo:workflow_compliance:ratio
+        eval_time: 15m
+        exp_samples:
+          - labels: 'slo:workflow_compliance:ratio{workflow_type="OrderWorkflow",task_queue="orders"}'
+            value: 0.9
+
+  # Staleness is judged per poll loop. closed_window refreshes every 600s, so a
+  # 700s-old window poll is NORMAL; the same age on the fast loop is not.
+  - interval: 1m
+    input_series:
+      - series: 'temporal_slo_last_successful_poll_timestamp_seconds{workflow_type="OrderWorkflow",query_kind="closed_window"}'
+        values: '1700x40'
+      - series: 'temporal_slo_last_successful_poll_timestamp_seconds{workflow_type="OrderWorkflow",query_kind="running"}'
+        values: '0x40'
+      - series: 'temporal_slo_last_successful_poll_timestamp_seconds{workflow_type="PaymentWorkflow",query_kind="closed_window"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: MonitorPollsStale
+        exp_alerts:
+          - exp_labels: {workflow_type: OrderWorkflow, query_kind: running, severity: critical, component: workflow-slo}
+            exp_annotations:
+              summary: "SLO monitor polls are stale for OrderWorkflow (running)"
+              description: "Visibility queries of this kind have not ALL succeeded within 5 minutes (25 for closed_window). Every temporal_slo_* gauge is now showing its last known value, NOT current state. Treat the duration SLI as unavailable until this clears; check temporal_slo_poll_errors_total for the reason."
+          - exp_labels: {workflow_type: PaymentWorkflow, query_kind: closed_window, severity: critical, component: workflow-slo}
+            exp_annotations:
+              summary: "SLO monitor polls are stale for PaymentWorkflow (closed_window)"
+              description: "Visibility queries of this kind have not ALL succeeded within 5 minutes (25 for closed_window). Every temporal_slo_* gauge is now showing its last known value, NOT current state. Treat the duration SLI as unavailable until this clears; check temporal_slo_poll_errors_total for the reason."
