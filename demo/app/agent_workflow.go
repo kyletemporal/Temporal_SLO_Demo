@@ -46,7 +46,26 @@ func AgentWorkflow(ctx workflow.Context, in AgentInput) (AgentResult, error) {
 	}
 	model := in.Model
 	if model == "" {
-		model = defaultModelFor(provider)
+		// SideEffect records the value in history on first execution and
+		// returns the RECORDED value on replay. defaultModelFor reads the
+		// Worker's environment, which can differ across a rollout; calling it
+		// directly recomputed the model on every replay.
+		//
+		// Behind GetVersion because adding a SideEffect changes the command
+		// sequence: an agent run started on the old code and replayed on the
+		// new would otherwise fail with exactly the non-determinism error
+		// `make chaos-nde` demonstrates. Old runs keep the old path.
+		if workflow.GetVersion(ctx, "model-recorded-in-side-effect", workflow.DefaultVersion, 1) == workflow.DefaultVersion {
+			model = defaultModelFor(provider)
+		} else {
+			var resolved string
+			if err := workflow.SideEffect(ctx, func(workflow.Context) any {
+				return defaultModelFor(provider)
+			}).Get(&resolved); err != nil {
+				return AgentResult{}, err
+			}
+			model = resolved
+		}
 	}
 
 	// Two Activity option sets, because model calls and tool calls fail in
@@ -198,16 +217,16 @@ Use the provided tools to answer questions about orders, inventory and shipping.
 Call a tool when you need a fact you do not have; answer directly when you do.
 Keep answers to two sentences.`
 
-// defaultModelFor is read at WORKFLOW time, so it must be deterministic on
-// replay. env() reads the Worker's environment, which is stable for the life of
-// a Worker but NOT guaranteed identical across Workers in a fleet — so a
-// mid-run rollout that changes ANTHROPIC_MODEL could in principle change the
-// value a replay computes.
+// defaultModelFor reads the Worker's environment, which is stable for the life
+// of a Worker but NOT across a fleet — a rollout that changes ANTHROPIC_MODEL
+// changes what it returns. It is therefore only ever called inside
+// workflow.SideEffect (see AgentWorkflow), which records the first result in
+// history and replays THAT.
 //
-// That is tolerable here only because the result is recorded into the Activity
-// input on the first iteration and every later iteration reuses the same string
-// from history. Anything with a wider blast radius belongs in AgentInput, set
-// once by the caller — which is what the API handler does.
+// An earlier comment here claimed the model was "recorded into the Activity
+// input and reused from history" and that the API handler set it. Neither was
+// true: the Go SDK does not compare Activity inputs on replay, the value was
+// recomputed from env every replay, and the handler never set Model.
 func defaultModelFor(provider string) string {
 	switch provider {
 	case "anthropic":

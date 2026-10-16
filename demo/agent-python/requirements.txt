@@ -2,8 +2,9 @@
 # dependency is the first thing that breaks a demo, and it breaks it on
 # someone else's laptop rather than here.
 #
-# Refresh deliberately with `make agent-py-deps-refresh`, not silently at
-# build time.
+# Refresh deliberately — edit the pins, rebuild with
+# `docker compose --profile langchain build agent-worker-langchain`, and run
+# `make agent-py-test` — not silently at build time.
 
 temporalio==1.32.0
 

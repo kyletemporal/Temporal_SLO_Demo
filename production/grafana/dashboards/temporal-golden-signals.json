@@ -1534,165 +1534,9 @@
     },
     {
       "type": "row",
-      "title": "L \u2014 Logs  \u00b7  the only place an execution ID may live",
-      "collapsed": false,
-      "id": 23,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 51
-      },
-      "panels": []
-    },
-    {
-      "type": "timeseries",
-      "title": "Log volume by service and level",
-      "id": 24,
-      "datasource": {
-        "type": "loki",
-        "uid": "loki"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 0,
-        "y": 52
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "editorMode": "code",
-          "expr": "sum by (service, level) (rate({project=\"temporal-obs-demo\", level=~\"error|warn\"}[$__interval]))",
-          "range": true,
-          "instant": false,
-          "refId": "A",
-          "legendFormat": "{{service}} {{level}}"
-        }
-      ],
-      "description": "Error and warning lines per second, from Loki.\n\nLevel is extracted with an ANCHORED regex on the line prefix. An unanchored match tags any line containing the word 'error' \u2014 which produced 644 phantom worker errors before it was fixed.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "unit": "logs",
-          "custom": {
-            "lineWidth": 2,
-            "fillOpacity": 18,
-            "showPoints": "never",
-            "spanNulls": false,
-            "gradientMode": "opacity",
-            "lineInterpolation": "smooth",
-            "axisSoftMin": 0
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "#0ca30c",
-                "value": null
-              },
-              {
-                "color": "#ec835a",
-                "value": 0.1
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "right",
-          "showLegend": true,
-          "calcs": []
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      }
-    },
-    {
-      "type": "logs",
-      "title": "Temporal Service errors (infra)",
-      "id": 25,
-      "datasource": {
-        "type": "loki",
-        "uid": "loki"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 8,
-        "y": 52
-      },
-      "description": "Server-side errors and warnings, JSON-parsed. This is where a persistence error or a shard problem explains a metric spike that the dashboards above can only show you the shape of.",
-      "targets": [
-        {
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "expr": "{project=\"temporal-obs-demo\", service=\"temporal\", level=~\"error|warn\"}",
-          "queryType": "range",
-          "refId": "A"
-        }
-      ],
-      "options": {
-        "showTime": true,
-        "wrapLogMessage": true,
-        "prettifyLogMessage": false,
-        "enableLogDetails": true,
-        "dedupStrategy": "none",
-        "sortOrder": "Descending"
-      }
-    },
-    {
-      "type": "logs",
-      "title": "Find stuck executions (workflow IDs)",
-      "id": 26,
-      "datasource": {
-        "type": "loki",
-        "uid": "loki"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 16,
-        "y": 52
-      },
-      "description": "THE PANEL METRICS CANNOT REPLACE.\n\nSurfaces worker log lines for non-determinism and Workflow Task failures, which carry WorkflowID and RunID.\n\nTMPRL1100 = non-determinism; TMPRL1101 = deadlock detected during workflow run (a Workflow Task taking too long, usually a blocking call in Workflow code). Both codes verified present in this stack by forcing a real NDE with `make chaos-nde`. The Loki datasource defines derived fields on both, so each ID is a link straight into the Temporal UI.\n\nOn servers below 1.30 (no TemporalReportedProblems) this is the primary route from a stuck-workflow alert to the affected executions.",
-      "targets": [
-        {
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "expr": "{project=\"temporal-obs-demo\", service=\"worker\"} |~ \"TMPRL1100|TMPRL1101|(?i)(non.?determin|workflow task failed|deadlock detected|panic)\"",
-          "queryType": "range",
-          "refId": "A"
-        }
-      ],
-      "options": {
-        "showTime": true,
-        "wrapLogMessage": true,
-        "prettifyLogMessage": false,
-        "enableLogDetails": true,
-        "dedupStrategy": "none",
-        "sortOrder": "Descending"
-      }
-    },
-    {
-      "type": "row",
       "title": "M \u2014 Workflow duration SLO  \u00b7  the executions nothing else can see",
       "collapsed": false,
-      "id": 27,
+      "id": 23,
       "gridPos": {
         "h": 1,
         "w": 24,
@@ -1704,7 +1548,7 @@
     {
       "type": "stat",
       "title": "Duration compliance",
-      "id": 28,
+      "id": 24,
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -1776,7 +1620,7 @@
     {
       "type": "timeseries",
       "title": "Open executions past budget",
-      "id": 29,
+      "id": 25,
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -1849,7 +1693,7 @@
     {
       "type": "timeseries",
       "title": "Running executions",
-      "id": 30,
+      "id": 26,
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -1909,7 +1753,7 @@
     {
       "type": "stat",
       "title": "Poll freshness",
-      "id": 31,
+      "id": 27,
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -1980,7 +1824,7 @@
     {
       "type": "stat",
       "title": "Server-reported stuck detection",
-      "id": 32,
+      "id": 28,
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -2048,7 +1892,7 @@
       "type": "row",
       "title": "N \u2014 Traces & profiles  \u00b7  where the time actually went",
       "collapsed": false,
-      "id": 33,
+      "id": 29,
       "gridPos": {
         "h": 1,
         "w": 24,
@@ -2060,7 +1904,7 @@
     {
       "type": "text",
       "title": "Open in Explore \u2014 the query is already written",
-      "id": 34,
+      "id": 30,
       "gridPos": {
         "h": 4,
         "w": 24,
@@ -2082,7 +1926,7 @@
     {
       "type": "timeseries",
       "title": "Span latency p95 by operation (from traces)",
-      "id": 35,
+      "id": 31,
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -2149,7 +1993,7 @@
     {
       "type": "timeseries",
       "title": "Span throughput by operation",
-      "id": 36,
+      "id": 32,
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"

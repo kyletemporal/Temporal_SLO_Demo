@@ -161,7 +161,7 @@ Both modules output the fleet in the shapes the rest of this repo consumes:
 
 ```hcl
 output "prometheus_namespace_regex"   # ^(orders|payments|sandbox)$
-output "monitor_namespaces"           # for monitor/slo-config.yaml
+output "monitor_namespaces"           # for your monitor config (monitor/slo-config.demo.yaml)
 ```
 
 Feed those in rather than maintaining the namespace list in the rules, the

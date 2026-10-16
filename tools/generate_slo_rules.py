@@ -211,7 +211,8 @@ HEADER = '''# ==================================================================
 #   1. Add `1h`-style rules for a 28d window in the layer-1 group below.
 #   2. Repoint the `slo:compliance_window_bad:ratio` alias in layer 2 at it.
 #   3. Raise Prometheus retention past 28d (docker-compose.yml) AND give it
-#      durable storage. Six hours of retention cannot answer a 30-day question,
+#      durable storage. This stack keeps 15d (--storage.tsdb.retention.time),
+#      which cannot answer a 28- or 30-day question,
 #      and a restart resets your error budget to pristine — which is the single
 #      most common way SLO dashboards end up lying.
 #

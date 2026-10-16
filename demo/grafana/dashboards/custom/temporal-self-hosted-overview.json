@@ -289,7 +289,7 @@
         {
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
           "editorMode": "code",
-          "expr": "sum by (namespace) (rate(poll_success_sync{namespace=~\"$namespace\"}[$__rate_interval]))\n/\nclamp_min(sum by (namespace) (rate(poll_success{namespace=~\"$namespace\"}[$__rate_interval])), 1)",
+          "expr": "sum by (namespace) (rate(poll_success_sync{namespace=~\"$namespace\", taskqueue!~\"temporal_sys_.*\"}[$__rate_interval]))\n/\nclamp_min(sum by (namespace) (rate(poll_success{namespace=~\"$namespace\", taskqueue!~\"temporal_sys_.*\"}[$__rate_interval])), 0.001)",
           "legendFormat": "{{namespace}}",
           "range": true,
           "refId": "A"
@@ -348,7 +348,7 @@
         {
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
           "editorMode": "code",
-          "expr": "sum by (namespace) (rate(poll_success{namespace=~\"$namespace\"}[$__rate_interval]))\n/\nclamp_min(\n  sum by (namespace) (rate(poll_success{namespace=~\"$namespace\"}[$__rate_interval]))\n  +\n  sum by (namespace) (rate(poll_timeouts{namespace=~\"$namespace\"}[$__rate_interval]))\n, 1)",
+          "expr": "sum by (namespace) (rate(poll_success{namespace=~\"$namespace\", taskqueue!~\"temporal_sys_.*\"}[$__rate_interval]))\n/\nclamp_min(\n  sum by (namespace) (rate(poll_success{namespace=~\"$namespace\", taskqueue!~\"temporal_sys_.*\"}[$__rate_interval]))\n  +\n  sum by (namespace) (rate(poll_timeouts{namespace=~\"$namespace\", taskqueue!~\"temporal_sys_.*\"}[$__rate_interval]))\n, 0.001)",
           "legendFormat": "{{namespace}}",
           "range": true,
           "refId": "A"
