@@ -59,6 +59,14 @@ run "plans_with_defaults" {
     error_message = "Deletion protection must default on."
   }
   assert {
+    condition     = aws_db_instance.temporal.identifier == "temporal-selfhosted"
+    error_message = "RDS must use a fixed identifier, so a killed apply cannot orphan a second instance."
+  }
+  assert {
+    condition     = aws_cloudwatch_log_group.rds.retention_in_days == 7
+    error_message = "The RDS log group must be Terraform-managed with an expiry."
+  }
+  assert {
     condition     = one([for p in aws_db_parameter_group.temporal.parameter : p.value if p.name == "rds.force_ssl"]) == "1"
     error_message = "rds.force_ssl must be 1."
   }
@@ -68,6 +76,14 @@ run "rejects_open_api_endpoint" {
   command = plan
   variables {
     admin_cidrs = ["0.0.0.0/0"]
+  }
+  expect_failures = [var.admin_cidrs]
+}
+
+run "rejects_internet_split_into_halves" {
+  command = plan
+  variables {
+    admin_cidrs = ["0.0.0.0/1", "128.0.0.0/1"]
   }
   expect_failures = [var.admin_cidrs]
 }

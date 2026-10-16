@@ -51,9 +51,14 @@ variable "admin_cidrs" {
   EOT
   type        = list(string)
 
+  # Checks the PREFIX LENGTH, not the literal string. Rejecting only
+  # "0.0.0.0/0" let ["0.0.0.0/1", "128.0.0.0/1"] through — the whole internet
+  # in two entries. /16 is generous for an office or VPN egress range.
   validation {
-    condition     = length(var.admin_cidrs) > 0 && !contains(var.admin_cidrs, "0.0.0.0/0")
-    error_message = "Set at least one CIDR, and not 0.0.0.0/0 — the cluster API would be open to the internet."
+    condition = length(var.admin_cidrs) > 0 && alltrue([
+      for c in var.admin_cidrs : can(cidrnetmask(c)) && tonumber(split("/", c)[1]) >= 16
+    ])
+    error_message = "Set at least one CIDR, each /16 or narrower (e.g. 203.0.113.10/32). Wider ranges would open the cluster API to a large part of the internet."
   }
 }
 

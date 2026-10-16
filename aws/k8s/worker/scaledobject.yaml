@@ -59,6 +59,12 @@ spec:
     # wrong is a silent 1000x error that makes the autoscaler either never act or
     # never stop.
     - type: prometheus
+      # Value, not KEDA's default AverageValue. Latency is not additive across
+      # pods: AverageValue computes desired = ceil(metric / threshold) with no
+      # reference to current replicas, so the fleet oscillates (see hpa.yaml).
+      # The backlog trigger below keeps AverageValue — "tasks per Worker" IS
+      # additive.
+      metricType: Value
       metadata:
         serverAddress: http://prometheus.observability.svc.cluster.local:9090
         metricName: temporal_activity_schedule_to_start_p95
