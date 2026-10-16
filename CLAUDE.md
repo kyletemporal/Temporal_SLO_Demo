@@ -58,6 +58,7 @@ cd monitor && go test ./...
 cd terraform && terraform fmt -check -recursive
 for d in terraform/examples/*/ terraform/patterns/*/; do (cd $d && terraform validate); done
 python3 tools/generate_visibility_rules.py --check   # drift check
+tests/promql/run.sh                 # promtool unit tests: alerts fire in the no-series cases
 ```
 
 ## Traps this repo has already hit
@@ -78,9 +79,19 @@ and never fires, or a number that looks like data and is not.
 - **`absent(temporal_worker_task_slots_available)` never fires** on self-hosted —
   the server's own internal workers keep emitting it under
   `namespace="temporal_system"`. Scope absence alerts to your namespace and queue.
-- **Ratio alerts need an `or ... * 0` guard.** Without it, a total outage produces
-  no right-hand series, the expression returns nothing, and the alert stays
-  silent exactly when it matters.
+- **Ratio alerts need an `or ... * 0` guard — against the UNION of outcomes,
+  never against one of them.** The first version of every guard here borrowed
+  the success series (`or rate(workflow_success) * 0`), and so did the
+  denominator. In a total outage there IS no success series, both sides came
+  back empty, and the failure-ratio alerts in production, cloud and app-team
+  went silent exactly then — while their comments claimed to cover it. Build
+  these with `tools/promql_guards.py`, and add the no-series case to
+  `tests/promql/`. One regex selector (`rate({__name__=~"a|b"})`) is not the
+  fix: rate() drops the name and Prometheus rejects the duplicate label sets.
+- **Divide only like label sets.** Cloud's request counts carry `operation`,
+  activity timeouts carry `timeout_type`, and the limit gauges carry neither,
+  so a bare `/` or `+` between them returned EMPTY — four Cloud signals never
+  produced a value. Aggregate to the join key first.
 - **Idle queues make ratio alerts fire.** Sync-match and poll-success rules need a
   traffic floor.
 

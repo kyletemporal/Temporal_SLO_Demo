@@ -81,13 +81,21 @@ groups:
   # is on the SLA's exclusion list.
   #
   # Alert on the RATIO so the alert survives a limit increase.
+  #
+  # Usage is summed to the Namespace and matched `on(temporal_namespace)`.
+  # The counts carry `operation` (and actions carry `is_background`); the
+  # limit gauges are Namespace-level and do not. A bare `/` between them
+  # matches nothing, so these alerts could never fire — promtool at 95%
+  # usage: got []. Actions count only foreground work (is_background="false"),
+  # which is what the limit applies to.
   # ===========================================================================
   - name: temporal-cloud-limits
     rules:
       - alert: TemporalCloudActionsNearLimit
         expr: |
-          temporal_cloud_v1_total_action_count
-          / clamp_min(temporal_cloud_v1_action_limit, 1)
+          sum by (temporal_namespace) (temporal_cloud_v1_total_action_count{is_background="false"})
+          / on(temporal_namespace)
+          clamp_min(max by (temporal_namespace) (temporal_cloud_v1_action_limit), 1)
           > 0.8
         for: 15m
         labels:
@@ -99,8 +107,9 @@ groups:
 
       - alert: TemporalCloudRequestsNearLimit
         expr: |
-          temporal_cloud_v1_service_request_count
-          / clamp_min(temporal_cloud_v1_service_request_limit, 1)
+          sum by (temporal_namespace) (temporal_cloud_v1_service_request_count)
+          / on(temporal_namespace)
+          clamp_min(max by (temporal_namespace) (temporal_cloud_v1_service_request_limit), 1)
           > 0.8
         for: 15m
         labels:
@@ -114,8 +123,9 @@ groups:
         # stops Workers connecting, which presents as a backlog with no obvious
         # cause.
         expr: |
-          temporal_cloud_v1_service_pending_requests
-          / clamp_min(temporal_cloud_v1_poller_limit, 1)
+          sum by (temporal_namespace) (temporal_cloud_v1_service_pending_requests)
+          / on(temporal_namespace)
+          clamp_min(max by (temporal_namespace) (temporal_cloud_v1_poller_limit), 1)
           > 0.8
         for: 15m
         labels:
@@ -181,20 +191,26 @@ groups:
 
       - alert: TemporalCloudWorkflowFailureRatioHigh
         # Timeouts counted as bad: a saturated Worker fleet produces timeouts,
-        # not failures. The `or ... * 0` guard means a Namespace with failures
-        # but zero successes still produces a series — without it, total
-        # outage yields no alert.
+        # not failures. Every term is guarded against the UNION of outcomes
+        # (tools/promql_guards.py). The previous guard borrowed
+        # workflow_success, which has no series in a total outage, so the
+        # alert went silent exactly then (promtool: got []). Pinned by
+        # tests/promql/cloud.test.yml.
         expr: |
           (
-            (avg_over_time(temporal_cloud_v1_workflow_failed_count[5m])  or avg_over_time(temporal_cloud_v1_workflow_success_count[5m]) * 0)
+            (sum by (temporal_namespace, temporal_workflow_type) (avg_over_time(temporal_cloud_v1_workflow_failed_count[5m])) or (sum by (temporal_namespace, temporal_workflow_type) (avg_over_time(temporal_cloud_v1_workflow_success_count[5m])) or sum by (temporal_namespace, temporal_workflow_type) (avg_over_time(temporal_cloud_v1_workflow_failed_count[5m])) or sum by (temporal_namespace, temporal_workflow_type) (avg_over_time(temporal_cloud_v1_workflow_timeout_count[5m]))) * 0)
             +
-            (avg_over_time(temporal_cloud_v1_workflow_timeout_count[5m]) or avg_over_time(temporal_cloud_v1_workflow_success_count[5m]) * 0)
+            (sum by (temporal_namespace, temporal_workflow_type) (avg_over_time(temporal_cloud_v1_workflow_timeout_count[5m])) or (sum by (temporal_namespace, temporal_workflow_type) (avg_over_time(temporal_cloud_v1_workflow_success_count[5m])) or sum by (temporal_namespace, temporal_workflow_type) (avg_over_time(temporal_cloud_v1_workflow_failed_count[5m])) or sum by (temporal_namespace, temporal_workflow_type) (avg_over_time(temporal_cloud_v1_workflow_timeout_count[5m]))) * 0)
           )
           /
           clamp_min(
-            avg_over_time(temporal_cloud_v1_workflow_success_count[5m])
-            + (avg_over_time(temporal_cloud_v1_workflow_failed_count[5m])  or avg_over_time(temporal_cloud_v1_workflow_success_count[5m]) * 0)
-            + (avg_over_time(temporal_cloud_v1_workflow_timeout_count[5m]) or avg_over_time(temporal_cloud_v1_workflow_success_count[5m]) * 0),
+            (
+              (sum by (temporal_namespace, temporal_workflow_type) (avg_over_time(temporal_cloud_v1_workflow_success_count[5m])) or (sum by (temporal_namespace, temporal_workflow_type) (avg_over_time(temporal_cloud_v1_workflow_success_count[5m])) or sum by (temporal_namespace, temporal_workflow_type) (avg_over_time(temporal_cloud_v1_workflow_failed_count[5m])) or sum by (temporal_namespace, temporal_workflow_type) (avg_over_time(temporal_cloud_v1_workflow_timeout_count[5m]))) * 0)
+              +
+              (sum by (temporal_namespace, temporal_workflow_type) (avg_over_time(temporal_cloud_v1_workflow_failed_count[5m])) or (sum by (temporal_namespace, temporal_workflow_type) (avg_over_time(temporal_cloud_v1_workflow_success_count[5m])) or sum by (temporal_namespace, temporal_workflow_type) (avg_over_time(temporal_cloud_v1_workflow_failed_count[5m])) or sum by (temporal_namespace, temporal_workflow_type) (avg_over_time(temporal_cloud_v1_workflow_timeout_count[5m]))) * 0)
+              +
+              (sum by (temporal_namespace, temporal_workflow_type) (avg_over_time(temporal_cloud_v1_workflow_timeout_count[5m])) or (sum by (temporal_namespace, temporal_workflow_type) (avg_over_time(temporal_cloud_v1_workflow_success_count[5m])) or sum by (temporal_namespace, temporal_workflow_type) (avg_over_time(temporal_cloud_v1_workflow_failed_count[5m])) or sum by (temporal_namespace, temporal_workflow_type) (avg_over_time(temporal_cloud_v1_workflow_timeout_count[5m]))) * 0)
+            ),
             0.001
           )
           > 0.05
@@ -203,7 +219,7 @@ groups:
           severity: page
           component: temporal-application
         annotations:
-          summary: "Over 5% of Workflows failing or timing out in {{ $labels.temporal_namespace }}"
+          summary: "Over 5% of {{ $labels.temporal_workflow_type }} Workflows failing or timing out in {{ $labels.temporal_namespace }}"
           description: "Your application, not Temporal. Check retry policies and whether Workflows handle their failure paths. A spike in timeouts specifically usually means Worker saturation rather than bugs."
 
   # ===========================================================================
