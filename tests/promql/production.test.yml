@@ -1,0 +1,160 @@
+# promtool unit tests for production/prometheus. Run: tests/promql/run.sh
+#
+# The cases that matter are the ones where an outcome has NO SERIES. Counters
+# such as workflow_failed do not exist until the first failure, and in a total
+# outage workflow_success does not exist at all. A guard that leans on a
+# series which may be absent goes silent exactly when it is needed — that
+# shipped once, see tools/promql_guards.py.
+rule_files:
+  - ../../production/prometheus/slo-rules.yml
+  - ../../production/prometheus/alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  # 1. Total outage: every Workflow fails, workflow_success never appears.
+  - interval: 1m
+    input_series:
+      - series: 'workflow_failed{namespace="orders",instance="h1"}'
+        values: '0+10x40'
+      - series: 'workflow_timeout{namespace="orders",instance="h1"}'
+        values: '0+10x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: TemporalWorkflowFailureRatioHigh
+        exp_alerts:
+          - exp_labels: {namespace: orders, severity: page, component: temporal-application}
+            exp_annotations:
+              summary: "Over 5% of Workflows failing or timing out in orders"
+              description: "Terminal Workflow outcomes, not absorbed Activity failures. Check retry policies (MaximumAttempts=1 converts every Activity failure into a Workflow failure), whether the Workflow handles its failure paths, and whether the Worker fleet is keeping up — timeouts usually mean saturation rather than bugs."
+    promql_expr_test:
+      - expr: slo:sli_bad:ratio_rate5m{sli="workflow_completion"}
+        eval_time: 30m
+        exp_samples:
+          - labels: 'slo:sli_bad:ratio_rate5m{namespace="orders",sli="workflow_completion",tier="tenant"}'
+            value: 1
+
+  # 2. Partial failure: half failing, and no timeout series exists yet.
+  - interval: 1m
+    input_series:
+      - series: 'workflow_success{namespace="orders",instance="h1"}'
+        values: '0+10x40'
+      - series: 'workflow_failed{namespace="orders",instance="h1"}'
+        values: '0+10x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: TemporalWorkflowFailureRatioHigh
+        exp_alerts:
+          - exp_labels: {namespace: orders, severity: page, component: temporal-application}
+            exp_annotations:
+              summary: "Over 5% of Workflows failing or timing out in orders"
+              description: "Terminal Workflow outcomes, not absorbed Activity failures. Check retry policies (MaximumAttempts=1 converts every Activity failure into a Workflow failure), whether the Workflow handles its failure paths, and whether the Worker fleet is keeping up — timeouts usually mean saturation rather than bugs."
+    promql_expr_test:
+      - expr: slo:sli_bad:ratio_rate5m{sli="workflow_completion"}
+        eval_time: 30m
+        exp_samples:
+          - labels: 'slo:sli_bad:ratio_rate5m{namespace="orders",sli="workflow_completion",tier="tenant"}'
+            value: 0.5
+
+  # 3. Healthy: success only. The SLI must read 0, not be absent.
+  - interval: 1m
+    input_series:
+      - series: 'workflow_success{namespace="orders",instance="h1"}'
+        values: '0+100x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: TemporalWorkflowFailureRatioHigh
+        exp_alerts: []
+    promql_expr_test:
+      - expr: slo:sli_bad:ratio_rate5m{sli="workflow_completion"}
+        eval_time: 30m
+        exp_samples:
+          - labels: 'slo:sli_bad:ratio_rate5m{namespace="orders",sli="workflow_completion",tier="tenant"}'
+            value: 0
+
+  # 4. Internal namespaces never count, even when they fail.
+  - interval: 1m
+    input_series:
+      - series: 'workflow_failed{namespace="temporal_system",instance="h1"}'
+        values: '0+10x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: TemporalWorkflowFailureRatioHigh
+        exp_alerts: []
+
+  # 5. Healthy application queue + an idle Temporal system queue. The old
+  #    unscoped TemporalPollSuccessRateLow fired here (ratio 0.83). Nothing
+  #    in the matching group may fire.
+  - interval: 1m
+    input_series:
+      - series: 'poll_success{namespace="orders",taskqueue="orders"}'
+        values: '0+600x40'
+      - series: 'poll_success_sync{namespace="orders",taskqueue="orders"}'
+        values: '0+600x40'
+      - series: 'poll_timeouts{namespace="orders",taskqueue="orders"}'
+        values: '0+6x40'
+      - series: 'poll_timeouts{namespace="orders",taskqueue="temporal_sys_tq_scanner_taskqueue_0"}'
+        values: '0+120x40'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: TemporalMatchingStarved
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: TemporalSyncMatchRateLow
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: TemporalWorkerFleetOverProvisioned
+        exp_alerts: []
+
+  # 6. Starved: half the polls come back empty AND Activities wait ~1s.
+  - interval: 1m
+    input_series:
+      - series: 'poll_success{namespace="orders",taskqueue="orders"}'
+        values: '0+300x40'
+      - series: 'poll_success_sync{namespace="orders",taskqueue="orders"}'
+        values: '0+300x40'
+      - series: 'poll_timeouts{namespace="orders",taskqueue="orders"}'
+        values: '0+300x40'
+      - series: 'temporal_activity_schedule_to_start_latency_seconds_bucket{namespace="orders",task_queue="orders",le="0.2"}'
+        values: '0+0x40'
+      - series: 'temporal_activity_schedule_to_start_latency_seconds_bucket{namespace="orders",task_queue="orders",le="2"}'
+        values: '0+100x40'
+      - series: 'temporal_activity_schedule_to_start_latency_seconds_bucket{namespace="orders",task_queue="orders",le="+Inf"}'
+        values: '0+100x40'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: TemporalMatchingStarved
+        exp_alerts:
+          - exp_labels: {namespace: orders, severity: ticket, component: temporal-matching}
+            exp_annotations:
+              summary: "Matching starved in orders — polls empty AND tasks waiting"
+              description: "Poll success rate is below 90% AND schedule-to-start P99 is above 200ms, so Tasks are genuinely waiting for capacity. Check Worker host CPU next: HIGH means add Workers, LOW means raise MaxConcurrentActivityExecutionSize. Low poll success with LOW schedule-to-start is the opposite problem — see TemporalWorkerFleetOverProvisioned."
+      - eval_time: 35m
+        alertname: TemporalWorkerFleetOverProvisioned
+        exp_alerts: []
+
+  # 7. Over-provisioned: polls mostly empty, but nothing waits. Must be the
+  #    info alert, never the starved one.
+  - interval: 1m
+    input_series:
+      - series: 'poll_success{namespace="orders",taskqueue="orders"}'
+        values: '0+300x40'
+      - series: 'poll_success_sync{namespace="orders",taskqueue="orders"}'
+        values: '0+300x40'
+      - series: 'poll_timeouts{namespace="orders",taskqueue="orders"}'
+        values: '0+300x40'
+      - series: 'temporal_activity_schedule_to_start_latency_seconds_bucket{namespace="orders",task_queue="orders",le="0.01"}'
+        values: '0+100x40'
+      - series: 'temporal_activity_schedule_to_start_latency_seconds_bucket{namespace="orders",task_queue="orders",le="+Inf"}'
+        values: '0+100x40'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: TemporalMatchingStarved
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: TemporalWorkerFleetOverProvisioned
+        exp_alerts:
+          - exp_labels: {namespace: orders, severity: info, component: temporal-matching}
+            exp_annotations:
+              summary: "Worker fleet looks over-provisioned in orders (cost, not an incident)"
+              description: "Poll success rate is low, but schedule-to-start is near zero and sync match is healthy — Tasks are picked up instantly and the pollers are simply idle. Reduce the fleet or enable Worker/poller autoscaling. Do NOT raise this above info."

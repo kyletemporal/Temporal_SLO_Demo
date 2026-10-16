@@ -6,6 +6,8 @@ math is defined on bad events. Availability = 1 - bad_ratio.
 """
 import pathlib
 
+from promql_guards import outcome_ratio_terms
+
 OUT = str(pathlib.Path(__file__).resolve().parent.parent / "demo/prometheus/slo-rules.yml")
 
 WINDOWS = ["5m", "30m", "1h", "6h"]
@@ -147,22 +149,14 @@ SLIS = [
     # getting what they asked for.
     dict(name="workflow_completion", objective=0.99, by=None,
          desc="Workflow Executions that completed successfully (timeouts count as bad)",
-         expr=(
-             '(\n'
-             '            (sum(rate(workflow_failed[{w}]))  or sum(rate(workflow_success[{w}])) * 0)\n'
-             '            +\n'
-             '            (sum(rate(workflow_timeout[{w}])) or sum(rate(workflow_success[{w}])) * 0)\n'
-             '          )\n'
-             '          /\n'
-             '          clamp_min(\n'
-             '            sum(rate(workflow_success[{w}]))\n'
-             '            +\n'
-             '            (sum(rate(workflow_failed[{w}]))  or sum(rate(workflow_success[{w}])) * 0)\n'
-             '            +\n'
-             '            (sum(rate(workflow_timeout[{w}])) or sum(rate(workflow_success[{w}])) * 0),\n'
-             '            0.001\n'
-             '          )'
-         )),
+         # Guarded against the union of outcomes, not against success: the old
+         # success-based guard went EMPTY in a total outage. See
+         # tools/promql_guards.py.
+         expr="{bad}\n          /\n          clamp_min(\n            {total},\n            0.001\n          )".format(
+             **dict(zip(("bad", "total"), outcome_ratio_terms(
+                 {"success": "workflow_success", "failed": "workflow_failed", "timeout": "workflow_timeout"},
+                 bad=("failed", "timeout"),
+                 wrap="sum(rate({}[{{w}}]))"))))),
 ]
 
 HEADER = '''# =============================================================================
@@ -191,7 +185,7 @@ HEADER = '''# ==================================================================
 #
 # A burn rate of 1 means you will consume exactly 100% of the error budget by
 # the end of the compliance window. A burn rate of 14.4 means you will consume
-# it in 1/14.4 of the window — about 2 hours of a 30-day budget.
+# it in 1/14.4 of the window — about two days of a 30-day budget (720h / 14.4 = 50h).
 #
 # ---------------------------------------------------------------------------
 # COMPLIANCE WINDOW — read this before trusting the budget numbers
