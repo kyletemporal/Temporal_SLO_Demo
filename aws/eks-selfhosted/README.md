@@ -82,22 +82,26 @@ Four CloudShell constraints shape the script:
 
 - **Idle sessions end after ~20 minutes, and EKS takes about that long to
   create.** Keep the tab active. If the session drops anyway, open a new one
-  and run the same command. State is in S3 with locking, so the apply resumes
-  where it stopped.
+  and run the same command. State is in S3, so resources that finished
+  creating are kept. A kill mid-apply can leave two things that a plain re-run
+  doesn't fix: a stale state lock, and a resource AWS created but state never
+  recorded. On failure the script prints the `force-unlock` and `import`
+  commands for both. RDS uses a fixed identifier, so it can't silently create
+  a second, orphaned instance.
 - **`$HOME` is capped at 1 GB.** Terraform's working directory is about 880 MB
   (measured), so it goes in `/tmp` and is re-initialised each session. The
   tools and the repo use about 285 MB of home.
-- **The public IP changes every session.** Every command adds the current
-  session's /32 to the EKS API allowlist before touching the cluster. To use
+- **The public IP changes every session.** Every command *replaces* the EKS
+  API allowlist with the current session's /32 plus `EXTRA_ADMIN_CIDRS`
+  before touching the cluster, so earlier sessions' IPs drop off. To use
   kubectl from your laptop as well, add
   `EXTRA_ADMIN_CIDRS=<laptop-ip>/32`. CloudShell can't open the UI or
   Grafana, so port-forward from the laptop.
 - **Your console identity becomes cluster admin.** It also needs permission
   to create VPC, EKS, RDS, IAM, Secrets Manager and S3 resources.
 
-Until this branch is merged, the script falls back to the `eks-selfhosted`
-branch automatically. Fetch the script from that branch too:
-`.../Temporal_SLO_Demo/eks-selfhosted/aws/eks-selfhosted/scripts/cloudshell.sh`.
+`REPO_URL` and `REPO_REF` override where the script clones from, for example
+after the repository moves.
 
 ---
 
@@ -236,6 +240,10 @@ you delete it:
 - the final RDS snapshot
 - RDS automated backups
 - the two Secrets Manager secrets, for their 7-day recovery window
+
+`teardown.sh` waits for the Prometheus volume to be released before it
+destroys the cluster, and stops if it isn't. Destroying first would orphan a
+billable EBS volume. `FORCE_DESTROY=1` overrides that check.
 
 ---
 

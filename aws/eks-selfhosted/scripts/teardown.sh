@@ -11,6 +11,7 @@
 #   - the RDS final snapshot ("<name>-final-<timestamp>")
 #   - RDS automated backups (delete_automated_backups = false)
 #   - both Secrets Manager secrets, for their 7-day recovery window
+# (The RDS CloudWatch log group is Terraform-managed and IS destroyed.)
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -38,10 +39,23 @@ if aws eks describe-cluster --region "$region" --name "$name" >/dev/null 2>&1; t
   echo "==> deleting namespaces (releases PVC-backed EBS volumes)"
   kubectl delete namespace temporal monitoring --ignore-not-found --wait=true --timeout=10m
 
-  left="$(kubectl get pv -o name 2>/dev/null | wc -l | tr -d ' ')"
-  if [ "$left" != 0 ]; then
-    echo "WARNING: $left PersistentVolume(s) still exist; their EBS volumes may outlive the cluster:"
+  # PV and EBS deletion is ASYNCHRONOUS after the namespace goes. Destroying
+  # the cluster first removes the CSI driver that would delete the volume, and
+  # the gp3 volume then outlives everything, still billing. Wait for it.
+  echo "==> waiting for PersistentVolumes to be released (up to 5 min)"
+  for _ in $(seq 1 60); do
+    [ "$(kubectl get pv -o name 2>/dev/null | wc -l | tr -d ' ')" = 0 ] && break
+    sleep 5
+  done
+  if [ "$(kubectl get pv -o name 2>/dev/null | wc -l | tr -d ' ')" != 0 ]; then
     kubectl get pv
+    if [ "${FORCE_DESTROY:-0}" != 1 ]; then
+      echo "ERROR: PersistentVolumes still exist. Destroying now would orphan their EBS volumes."
+      echo "       Investigate (kubectl describe pv), or re-run with FORCE_DESTROY=1 and delete"
+      echo "       the volumes yourself: aws ec2 describe-volumes --filters Name=tag:kubernetes.io/created-for/pv/name,Values=*"
+      exit 1
+    fi
+    echo "WARNING: FORCE_DESTROY=1 — continuing; the volumes above will outlive the cluster."
   fi
 else
   echo "==> cluster $name not found; skipping Kubernetes cleanup"

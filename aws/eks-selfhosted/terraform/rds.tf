@@ -66,8 +66,22 @@ resource "aws_db_parameter_group" "temporal" {
   }
 }
 
+# Created by Terraform BEFORE the instance, so Terraform owns it. Left to RDS,
+# `enabled_cloudwatch_logs_exports` creates this group itself, outside
+# Terraform, with no expiry — and it survived teardown, billing forever.
+resource "aws_cloudwatch_log_group" "rds" {
+  name              = "/aws/rds/instance/${var.name}/postgresql"
+  retention_in_days = 7
+}
+
 resource "aws_db_instance" "temporal" {
-  identifier_prefix = "${var.name}-"
+  # A FIXED identifier, not identifier_prefix. If an apply is killed mid-create
+  # (an idle CloudShell session does exactly that), the half-created instance
+  # is not in state. With a prefix the re-run creates a SECOND instance and
+  # orphans the first — billable, deletion-protected, invisible to destroy.
+  # With a fixed name the re-run fails loudly on the name clash instead, and
+  # `terraform import aws_db_instance.temporal <name>` recovers it.
+  identifier = var.name
 
   engine         = "postgres"
   engine_version = var.postgres_engine_version
@@ -104,6 +118,8 @@ resource "aws_db_instance" "temporal" {
   performance_insights_enabled          = true
   performance_insights_retention_period = 7
   enabled_cloudwatch_logs_exports       = ["postgresql"]
+
+  depends_on = [aws_cloudwatch_log_group.rds]
 
   auto_minor_version_upgrade = true
   apply_immediately          = false

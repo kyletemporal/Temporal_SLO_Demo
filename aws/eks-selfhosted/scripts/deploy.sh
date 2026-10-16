@@ -115,7 +115,21 @@ EOF
 fi
 
 say "database CA bundle"
-CA_TMP="$(mktemp)"; trap 'rm -f "$CA_TMP"' EXIT
+CA_TMP="$(mktemp)"
+# Secret values pass through 0600 files here and NEVER through argv, where
+# `ps` and shell history would show them (--from-literal, --secret-string).
+SECRETS_DIR="$(mktemp -d)"; chmod 700 "$SECRETS_DIR"
+BOOTSTRAP_SECRET_CREATED=0
+cleanup() {
+  rm -rf "$CA_TMP" "$SECRETS_DIR"
+  # The RDS master credential must not outlive this script, however it exits
+  # (a failed `kubectl logs`, Ctrl-C, set -e on anything after creation).
+  if [ "$BOOTSTRAP_SECRET_CREATED" = 1 ]; then
+    kubectl -n "$NS" delete secret db-bootstrap --ignore-not-found >/dev/null 2>&1 || true
+  fi
+}
+trap cleanup EXIT
+secret_file() { (umask 077; printf '%s' "$2" > "$SECRETS_DIR/$1"); echo "$SECRETS_DIR/$1"; }
 if [ "$MODE" = terraform ]; then
   curl -fsSL "$RDS_CA_URL" -o "$CA_TMP" || die "could not download the RDS CA bundle from $RDS_CA_URL"
 else
@@ -132,14 +146,22 @@ gen_password() { openssl rand -base64 48 | tr -d '/+=\n' | cut -c1-32; }
 
 say "temporal role password"
 if [ "$MODE" = terraform ]; then
+  # Generate a password ONLY when the secret has no value yet. Any other
+  # failure — throttling, AccessDenied, expired CloudShell credentials — must
+  # stop the deploy: treating it as "no secret" used to generate and store a
+  # NEW password, re-apply it to the role, and leave the running server pods
+  # on the old one until their connections recycled and auth failed.
   if APP_PASSWORD="$(aws secretsmanager get-secret-value --region "$REGION" \
-        --secret-id "$DB_APP_SECRET_ARN" --query SecretString --output text 2>/dev/null)"; then
+        --secret-id "$DB_APP_SECRET_ARN" --query SecretString --output text 2>"$SECRETS_DIR/err")"; then
     echo "using existing value from Secrets Manager"
-  else
+  elif grep -q "ResourceNotFoundException" "$SECRETS_DIR/err"; then
     APP_PASSWORD="$(gen_password)"
     aws secretsmanager put-secret-value --region "$REGION" --secret-id "$DB_APP_SECRET_ARN" \
-      --secret-string "$APP_PASSWORD" >/dev/null
-    echo "generated and stored in Secrets Manager"
+      --secret-string "file://$(secret_file app "$APP_PASSWORD")" >/dev/null
+    echo "first deploy: generated and stored in Secrets Manager"
+  else
+    die "could not read $DB_APP_SECRET_ARN — refusing to generate a new password:
+$(cat "$SECRETS_DIR/err")"
   fi
   MASTER_JSON="$(aws secretsmanager get-secret-value --region "$REGION" \
     --secret-id "$DB_MASTER_SECRET_ARN" --query SecretString --output text)"
@@ -150,8 +172,13 @@ else
   APP_PASSWORD="$(kubectl -n "$NS" get secret temporal-db -o jsonpath='{.data.password}' 2>/dev/null | base64 -d || true)"
   [ -n "$APP_PASSWORD" ] && echo "reusing existing Kubernetes secret" || { APP_PASSWORD="$(gen_password)"; echo "generated"; }
 fi
-kubectl -n "$NS" create secret generic temporal-db --from-literal=password="$APP_PASSWORD" \
+kubectl -n "$NS" create secret generic temporal-db --from-file=password="$(secret_file app "$APP_PASSWORD")" \
   --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+# A checksum of the password goes on the server pods as an annotation (below).
+# The chart reads the password only from the Secret at container start and
+# puts no checksum on the pod template, so without this a changed password
+# never restarts the server and it keeps authenticating with the old one.
+DB_PASSWORD_SHA="$(printf '%s' "$APP_PASSWORD" | openssl dgst -sha256 | awk '{print $NF}' | cut -c1-16)"
 
 # -----------------------------------------------------------------------------
 # Database bootstrap: role + databases, as the master user, once per deploy.
@@ -159,9 +186,12 @@ kubectl -n "$NS" create secret generic temporal-db --from-literal=password="$APP
 # -----------------------------------------------------------------------------
 say "bootstrapping the temporal role and databases"
 kubectl -n "$NS" delete job db-bootstrap --ignore-not-found >/dev/null
+BOOTSTRAP_SECRET_CREATED=1
 kubectl -n "$NS" create secret generic db-bootstrap \
-  --from-literal=username="$DB_MASTER_USER" --from-literal=password="$DB_MASTER_PASSWORD" \
+  --from-literal=username="$DB_MASTER_USER" \
+  --from-file=password="$(secret_file master "$DB_MASTER_PASSWORD")" \
   --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+rm -f "$SECRETS_DIR/master"
 unset DB_MASTER_PASSWORD
 kubectl -n "$NS" create configmap db-bootstrap-sql --from-file="$ROOT/helm/db-bootstrap.sql" \
   --dry-run=client -o yaml | kubectl apply -f - >/dev/null
@@ -200,12 +230,12 @@ spec:
 EOF
 if ! kubectl -n "$NS" wait --for=condition=complete job/db-bootstrap --timeout=5m; then
   kubectl -n "$NS" logs job/db-bootstrap --tail=30 || true
-  kubectl -n "$NS" delete secret db-bootstrap --ignore-not-found >/dev/null
-  die "database bootstrap failed (logs above)"
+  die "database bootstrap failed (logs above)"   # cleanup() removes the secret
 fi
-kubectl -n "$NS" logs job/db-bootstrap --tail=20 | sed 's/^/    /'
 kubectl -n "$NS" delete secret db-bootstrap >/dev/null
+BOOTSTRAP_SECRET_CREATED=0
 echo "master credential removed from the cluster"
+kubectl -n "$NS" logs job/db-bootstrap --tail=20 | sed 's/^/    /' || true
 
 # -----------------------------------------------------------------------------
 # Monitoring first: Temporal's ServiceMonitor needs the CRDs it installs.
@@ -214,7 +244,8 @@ if [ "${SKIP_MONITORING:-0}" != 1 ]; then
   say "kube-prometheus-stack $KPS_CHART_VERSION"
   if ! kubectl -n "$MON_NS" get secret grafana-admin >/dev/null 2>&1; then
     kubectl -n "$MON_NS" create secret generic grafana-admin \
-      --from-literal=admin-user=admin --from-literal=admin-password="$(gen_password)" >/dev/null
+      --from-literal=admin-user=admin \
+      --from-file=admin-password="$(secret_file grafana "$(gen_password)")" >/dev/null
   fi
   sc_args=()
   if [ -n "$STORAGE_CLASS" ]; then
@@ -259,6 +290,7 @@ helm upgrade --install temporal temporal \
   --repo "$TEMPORAL_REPO" --version "$TEMPORAL_CHART_VERSION" \
   -n "$NS" "${values[@]}" \
   --set "server.config.numHistoryShards=$NUM_HISTORY_SHARDS" \
+  --set-string "server.podAnnotations.db-password-sha256=$DB_PASSWORD_SHA" \
   --set "server.config.persistence.default.sql.host=$DB_HOST" \
   --set "server.config.persistence.default.sql.port=$DB_PORT" \
   --set "server.config.persistence.default.sql.tls.serverName=$DB_HOST" \
