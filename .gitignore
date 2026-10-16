@@ -6,6 +6,19 @@ demo/grafana/dashboards/community/*.json
 __pycache__/
 *.pyc
 
+# Compiled Go binaries — anchored to exact paths, because `go build` names its
+# output after the module's last path element and a bare `app` pattern would
+# also ignore the SOURCE directory demo/app. demo/app/temporal-obs-demo was
+# tracked for months: a 36 MB macOS build nothing needs (the Dockerfile builds
+# its own), rewritten by every local `go build ./...`.
+/demo/app/temporal-obs-demo
+/demo/app/app
+/demo/lab/lab
+/monitor/monitor
+/monitor/budget-derive
+/monitor/cmd/monitor/monitor
+/monitor/cmd/budget-derive/budget-derive
+
 # OS
 .DS_Store
 app-team/configured/
