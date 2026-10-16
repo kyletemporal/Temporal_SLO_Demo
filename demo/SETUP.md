@@ -329,7 +329,8 @@ docker compose restart worker
 ```
 
 Wait for schedule-to-start to return to baseline before starting the next one.
-For a completely clean slate: `make down && make up`.
+For a completely clean slate: `make reset && make up`. (`make down` keeps
+metrics, logs and the database; `make reset` deletes them.)
 
 ---
 

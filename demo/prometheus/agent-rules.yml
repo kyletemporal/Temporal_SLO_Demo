@@ -165,9 +165,12 @@ groups:
 
       - alert: GenAIProviderErrorsHigh
         expr: |
-          sum(genai:llm_errors:rate5m{error_type!~"refusal"})
+          # Per provider. A bare sum() dropped gen_ai_system, so the summary's
+          # {{ $labels.gen_ai_system }} rendered empty and a failing provider
+          # was averaged in with healthy ones.
+          sum by (gen_ai_system) (genai:llm_errors:rate5m{error_type!~"refusal"})
           /
-          clamp_min(sum(rate(gen_ai_client_operation_duration_seconds_count[5m])), 0.0001)
+          clamp_min(sum by (gen_ai_system) (rate(gen_ai_client_operation_duration_seconds_count[5m])), 0.0001)
           > 0.05
         for: 10m
         labels:
@@ -212,7 +215,11 @@ groups:
       # a tool description that stopped matching what the model is asked to do.
       - alert: GenAIToolUsageStopped
         expr: |
-          sum(rate(gen_ai_agent_tool_calls_total[15m])) == 0
+          # `or vector(0)` is load-bearing: OTel creates a counter on first
+          # record, so a deploy that NEVER calls a tool has no
+          # gen_ai_agent_tool_calls_total series at all, `== 0` matches
+          # nothing, and this alert could not fire in exactly its case.
+          (sum(rate(gen_ai_agent_tool_calls_total[15m])) or vector(0)) == 0
           and
           sum(rate(gen_ai_agent_runs_total[15m])) > 0
         for: 20m

@@ -180,6 +180,10 @@ scale-up: ## Scale workers up (default 5) — use mid-storm to show recovery. WO
 
 .PHONY: scale-reset
 scale-reset: ## Back to 1 worker
+	@# rm -sf first: `up --scale worker=1` alone stops the surplus replicas but
+	@# leaves their containers, and a later compose command brings them back
+	@# (see scripts/chaos-poller-flood-reset.sh, where this was measured).
+	docker compose rm -sf worker
 	docker compose up -d --scale worker=1 worker
 
 # Force a REAL non-determinism error.
@@ -301,7 +305,10 @@ agent-runaway: ## The runaway agent: loops to the cap, spends money, NO alert fi
 
 .PHONY: agent-langchain
 agent-langchain: ## Start the LangChain (Python) worker — needs an API key, large image
-	@if [ -z "$$ANTHROPIC_API_KEY" ] && [ -z "$$OPENAI_API_KEY" ]; then \
+	@# Make does not read .env (Compose does), so the shell-only check refused
+	@# a correctly configured demo/.env. Accept either.
+	@if [ -z "$$ANTHROPIC_API_KEY" ] && [ -z "$$OPENAI_API_KEY" ] && \
+	    ! grep -qE '^(ANTHROPIC|OPENAI)_API_KEY=.+' .env 2>/dev/null; then \
 		echo "ERROR: set ANTHROPIC_API_KEY or OPENAI_API_KEY in demo/.env first."; \
 		echo "       The LangChain worker has no offline mock — unlike the Go agent,"; \
 		echo "       it would crash-loop without one and look like a broken stack."; \
@@ -329,7 +336,9 @@ agent-py-test: ## Verify the Python worker agrees with the Go worker (cost, taxo
 
 .PHONY: agent-test
 agent-test: ## Go unit tests: cost maths, error taxonomy, loop termination
-	@cd app && go test ./... 2>&1 | tail -20
+	@# No `| tail`: a pipeline exits with tail's status, so failing tests
+	@# reported success.
+	@cd app && go test ./...
 
 # -----------------------------------------------------------------------------
 # Scale and capacity

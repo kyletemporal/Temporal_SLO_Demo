@@ -78,6 +78,6 @@ echo "    Prometheus picks up the new replicas through Compose DNS within ~10s."
 echo "    Nothing was lost — every queued Task will now execute."
 echo ""
 echo "    Reset to a single worker when finished:"
-echo "      docker compose up -d --scale worker=1 worker"
+echo "      make scale-reset     # rm -sf first; plain --scale=1 leaves containers behind"
 
 # Load container is removed by the EXIT trap.

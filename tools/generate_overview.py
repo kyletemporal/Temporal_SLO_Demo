@@ -35,8 +35,16 @@ empty:
 """
 import json, sys, pathlib
 
-OUT = sys.argv[1] if len(sys.argv) > 1 else \
-    str(pathlib.Path(__file__).resolve().parent.parent / "demo/grafana/dashboards/custom/temporal-overview.json")
+# No argument: write EVERY bundle's copy. The production board used to be a
+# hand copy of the demo one that no generator wrote, so CI's drift check could
+# never see it and it drifted from its source silently.
+if len(sys.argv) == 1:
+    import subprocess
+    _root = pathlib.Path(__file__).resolve().parent.parent
+    for _out in ("demo/grafana/dashboards/custom/temporal-overview.json", "production/grafana/dashboards/temporal-overview.json"):
+        subprocess.run([sys.executable, __file__, str(_root / _out)], check=True)
+    sys.exit(0)
+OUT = sys.argv[1]
 
 DS = {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}
 

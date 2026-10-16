@@ -295,10 +295,11 @@ services:
       # of data — the budget silently resets to pristine every time the
       # retention window rolls past the incident that spent it.
       #
-      # Still not production storage: there is no remote write and no volume
-      # mount, so `make down` erases every error budget. A real SLO stack needs
-      # durable, long-retention storage; a laptop demo with an amnesiac budget
-      # is the most common way SLO dashboards end up lying about attainment.
+      # Still not production storage. History survives `make down` (the
+      # prom-data volume) but not `make reset`, there is no remote write, and
+      # 15d cannot hold a 28-day window. A real SLO stack needs durable,
+      # long-retention storage; an amnesiac budget is the most common way SLO
+      # dashboards end up lying about attainment.
       - --storage.tsdb.retention.time=15d
       - --web.enable-lifecycle
       # Tempo's metrics_generator remote-writes span metrics here. Without this
