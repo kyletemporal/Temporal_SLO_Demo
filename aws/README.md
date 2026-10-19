@@ -159,9 +159,16 @@ platform team forbids new operators, or you already run the adapter.
 
 Two details the HPA version gets wrong easily, both silent:
 
-- **`AverageValue`, not `Value`.** `Value` ignores replica count, so the HPA has
-  no model of what adding a pod does — it overshoots to `maxReplicas` and
-  oscillates. `AverageValue` gives `desired = ceil(replicas × current / target)`.
+- **`Value` for latency, `AverageValue` only for additive metrics.** For an
+  External metric, `Value` gives `desired = ceil(replicas × current / target)`.
+  `AverageValue` divides the metric by the replica count first, so it computes
+  `ceil(current / target)` and ignores how many Workers are running. Latency
+  isn't additive across pods: under `AverageValue`, p95 = 0.3 s asks for 2
+  replicas whether the fleet is 2 or 40, and the fleet oscillates. Backlog
+  ("tasks per Worker") is additive, so `AverageValue` is right there.
+  **This section previously said the reverse**, and both manifests shipped with
+  it. KEDA's prometheus trigger defaults to `AverageValue`, so the latency
+  trigger sets `metricType: Value` explicitly.
 - **A `metricSelector` scoping to one Task Queue.** Without it the adapter
   aggregates every queue into one number, and a healthy queue masks a starved one.
 

@@ -31,7 +31,8 @@
 #    Terraform's working directory (.terraform) goes to /tmp. That means
 #    re-initialising each session, which this script does automatically.
 # 3. Each session gets a different public IP. The EKS API only accepts
-#    admin_cidrs, so every run adds the current session's /32 and applies the
+#    admin_cidrs, so every run REPLACES the allowlist with the current session's
+#    /32 plus EXTRA_ADMIN_CIDRS (earlier sessions' IPs drop off) and applies the
 #    change before talking to the cluster.
 # 4. CloudShell's credentials are whoever is signed in to the console. That
 #    principal becomes cluster admin, needs rights to create VPC/EKS/RDS/IAM/
@@ -40,7 +41,8 @@
 set -euo pipefail
 
 ENV_NAME="${ENV_NAME:-temporal-selfhosted}"
-REPO_URL="https://github.com/kyletemporal/Temporal_SLO_Demo.git"
+# Overridable so the script keeps working when the repository moves.
+REPO_URL="${REPO_URL:-https://github.com/kyletemporal/Temporal_SLO_Demo.git}"
 REPO_REF="${REPO_REF:-main}"
 REPO_DIR="${REPO_DIR:-$HOME/Temporal_SLO_Demo}"
 
@@ -126,13 +128,6 @@ fetch_repo() {
   else
     say "cloning $REPO_URL ($REPO_REF)"
     git clone -q --depth 1 --branch "$REPO_REF" "$REPO_URL" "$REPO_DIR"
-  fi
-  # Until the EKS work is merged, main does not have it yet.
-  if [ ! -d "$REPO_DIR/aws/eks-selfhosted" ] && [ "$REPO_REF" = main ]; then
-    warn "aws/eks-selfhosted is not on main yet — using the eks-selfhosted branch"
-    REPO_REF=eks-selfhosted
-    git -C "$REPO_DIR" fetch --depth 1 origin "$REPO_REF" -q
-    git -C "$REPO_DIR" checkout -q -B "$REPO_REF" FETCH_HEAD
   fi
   ROOT="$REPO_DIR/aws/eks-selfhosted"
   TF_DIR="$ROOT/terraform"
@@ -267,7 +262,22 @@ command — state is in S3, and the apply resumes.
 EOF
 
   say "terraform apply"
-  terraform -chdir="$TF_DIR" apply -input=true
+  if ! terraform -chdir="$TF_DIR" apply -input=true; then
+    cat >&2 <<EOF
+
+The apply failed. If the session was killed mid-apply, two things can be left
+behind — both recoverable, neither fixed by simply re-running:
+
+  1. A stale state lock ("Error acquiring the state lock"). Copy the Lock ID
+     from the error, then:
+       terraform -chdir="$TF_DIR" force-unlock <LOCK_ID>
+  2. A resource AWS created but state never recorded, so the re-run fails with
+     "already exists". Import it, then re-run:
+       terraform -chdir="$TF_DIR" import aws_db_instance.temporal $ENV_NAME
+       terraform -chdir="$TF_DIR" import 'module.eks.aws_eks_cluster.this[0]' $ENV_NAME
+EOF
+    exit 1
+  fi
 
   aws eks update-kubeconfig --name "$ENV_NAME" >/dev/null
   NUM_HISTORY_SHARDS="${NUM_HISTORY_SHARDS:-512}" bash "$ROOT/scripts/deploy.sh"

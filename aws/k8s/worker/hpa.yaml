@@ -89,15 +89,23 @@ spec:
               namespace: NAMESPACE
               task_queue: orders
         target:
-          # AverageValue, not Value.
+          # Value, not AverageValue — and the difference is the whole model.
           #
-          # `Value` compares the metric to the target directly and ignores
-          # replica count, so the HPA has no model of what adding a pod does —
-          # it overshoots to maxReplicas and then oscillates.
+          # For an External metric:
+          #   Value         desired = ceil(currentReplicas * current / target)
+          #   AverageValue  the metric is divided by currentReplicas first, so
+          #                 desired = ceil(current / target), INDEPENDENT of
+          #                 how many Workers are running.
           #
-          # `AverageValue` divides by current replicas, which is the behaviour
-          # you want: desired = ceil(replicas * current / target).
-          type: AverageValue
+          # Schedule-to-start latency is not additive across pods, so it needs
+          # the proportional form. Under AverageValue, p95 = 0.3s asks for 2
+          # replicas whether the fleet is 2 or 40; once 40 Workers bring p95
+          # down to 0.1s the target drops to 1, the fleet scales down, latency
+          # climbs, and it oscillates. (This file previously said the
+          # opposite — the semantics above are the Kubernetes HPA algorithm's.)
+          # AverageValue is right for ADDITIVE metrics such as backlog: "tasks
+          # per Worker". See scaledobject.yaml, which uses one of each.
+          type: Value
           # UNITS MATTER, AND GETTING THIS WRONG IS SILENT.
           #
           # 200m = 0.2 SECONDS, targeting Temporal's published 200ms guidance.
@@ -108,7 +116,7 @@ spec:
           # metric name has no _seconds suffix and the target is "200", not
           # "200m" — a 1000x error that makes the autoscaler either never act
           # or never stop. Run `make verify-sdk-labels` against your workers.
-          averageValue: "200m"
+          value: "200m"
 
   behavior:
     # Scale UP fast, DOWN slowly. The asymmetry is deliberate: scaling up late
