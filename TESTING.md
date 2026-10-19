@@ -168,7 +168,7 @@ documented as accepted risks.
 
 **Fixed**
 
-1. **`production/alerts.yml` paged permanently if deployed unedited.**
+1. **`production/prometheus/alerts.yml` paged permanently if deployed unedited.**
    `absent()` on a selector matching nothing returns 1, so
    `TemporalWorkerFleetAbsent` with `REPLACE_ME` still in it fired immediately
    and forever on a healthy cluster. Now ships commented out with instructions —

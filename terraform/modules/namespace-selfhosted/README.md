@@ -87,5 +87,5 @@ be driven per-Namespace from a map.
 ## Outputs
 
 `namespaces` (live state per Namespace), `names`, `monitor_namespaces`, and
-`prometheus_namespace_regex` — feed the last two into `monitor/slo-config.yaml`
+`prometheus_namespace_regex` — feed the last two into your monitor config (see `monitor/slo-config.demo.yaml`)
 and the Prometheus rules instead of maintaining the list by hand.

@@ -390,26 +390,32 @@ P.append(ts("Sticky cache size vs forced evictions", {"h": 8, "w": 24, "x": 0, "
     ],
     legend_mode="table", legend_place="bottom", fill=10, calcs=["lastNotNull", "max"]))
 
-P.append(row("L — Logs  ·  the only place an execution ID may live", 51))
+# Demo only. These panels select on the demo's own log labels
+# (project="temporal-obs-demo") and its Loki datasource uid, neither of which
+# exists in someone else's stack — in production they were three permanently
+# empty panels, one of them the panel the NDE alert pointed operators at.
+# Production's alert text carries the LogQL instead.
+if "demo/" in OUT:
+    P.append(row("L — Logs  ·  the only place an execution ID may live", 51))
 
-P.append(ts("Log volume by service and level", {"h": 8, "w": 8, "x": 0, "y": 52},
-    [tgt('sum by (service, level) (rate({project="temporal-obs-demo", level=~"error|warn"}[$__interval]))',
-         legend="{{service}} {{level}}")],
-    "logs",
-    "Error and warning lines per second, from Loki.\n\nLevel is extracted with an ANCHORED regex on the line prefix. An unanchored match tags any line containing the word 'error' — which produced 644 phantom worker errors before it was fixed.",
-    thr={"mode": "absolute", "steps": [{"color": GOOD, "value": None},
-                                      {"color": SERIOUS, "value": 0.1}]},
-    legend_mode="table", legend_place="right", fill=18))
-P[-1]["targets"][0]["datasource"] = DS_LOKI
-P[-1]["datasource"] = DS_LOKI
+    P.append(ts("Log volume by service and level", {"h": 8, "w": 8, "x": 0, "y": 52},
+        [tgt('sum by (service, level) (rate({project="temporal-obs-demo", level=~"error|warn"}[$__interval]))',
+             legend="{{service}} {{level}}")],
+        "logs",
+        "Error and warning lines per second, from Loki.\n\nLevel is extracted with an ANCHORED regex on the line prefix. An unanchored match tags any line containing the word 'error' — which produced 644 phantom worker errors before it was fixed.",
+        thr={"mode": "absolute", "steps": [{"color": GOOD, "value": None},
+                                          {"color": SERIOUS, "value": 0.1}]},
+        legend_mode="table", legend_place="right", fill=18))
+    P[-1]["targets"][0]["datasource"] = DS_LOKI
+    P[-1]["datasource"] = DS_LOKI
 
-P.append(logs_panel("Temporal Service errors (infra)", {"h": 8, "w": 8, "x": 8, "y": 52},
-    '{project="temporal-obs-demo", service="temporal", level=~"error|warn"}',
-    "Server-side errors and warnings, JSON-parsed. This is where a persistence error or a shard problem explains a metric spike that the dashboards above can only show you the shape of."))
+    P.append(logs_panel("Temporal Service errors (infra)", {"h": 8, "w": 8, "x": 8, "y": 52},
+        '{project="temporal-obs-demo", service="temporal", level=~"error|warn"}',
+        "Server-side errors and warnings, JSON-parsed. This is where a persistence error or a shard problem explains a metric spike that the dashboards above can only show you the shape of."))
 
-P.append(logs_panel("Find stuck executions (workflow IDs)", {"h": 8, "w": 8, "x": 16, "y": 52},
-    '{project="temporal-obs-demo", service="worker"} |~ "TMPRL1100|TMPRL1101|(?i)(non.?determin|workflow task failed|deadlock detected|panic)"',
-    "THE PANEL METRICS CANNOT REPLACE.\n\nSurfaces worker log lines for non-determinism and Workflow Task failures, which carry WorkflowID and RunID.\n\nTMPRL1100 = non-determinism; TMPRL1101 = deadlock detected during workflow run (a Workflow Task taking too long, usually a blocking call in Workflow code). Both codes verified present in this stack by forcing a real NDE with `make chaos-nde`. The Loki datasource defines derived fields on both, so each ID is a link straight into the Temporal UI.\n\nOn servers below 1.30 (no TemporalReportedProblems) this is the primary route from a stuck-workflow alert to the affected executions."))
+    P.append(logs_panel("Find stuck executions (workflow IDs)", {"h": 8, "w": 8, "x": 16, "y": 52},
+        '{project="temporal-obs-demo", service="worker"} |~ "TMPRL1100|TMPRL1101|(?i)(non.?determin|workflow task failed|deadlock detected|panic)"',
+        "THE PANEL METRICS CANNOT REPLACE.\n\nSurfaces worker log lines for non-determinism and Workflow Task failures, which carry WorkflowID and RunID.\n\nTMPRL1100 = non-determinism; TMPRL1101 = deadlock detected during workflow run (a Workflow Task taking too long, usually a blocking call in Workflow code). Both codes verified present in this stack by forcing a real NDE with `make chaos-nde`. The Loki datasource defines derived fields on both, so each ID is a link straight into the Temporal UI.\n\nOn servers below 1.30 (no TemporalReportedProblems) this is the primary route from a stuck-workflow alert to the affected executions."))
 
 
 # =========================================================================
