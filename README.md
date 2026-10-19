@@ -166,6 +166,27 @@ first run produce wrong numbers rather than missing ones:
 
 ---
 
+## Worker tuning lab
+
+`make lab` opens a live UI at http://localhost:8095. From it you can change
+real Worker options while load runs: pollers, slots, sticky cache, CPUs, and
+whether Activities are CPU-bound, I/O-bound or just slow. Go and Python
+Workers run side by side.
+
+It doesn't simulate anything. Every number comes from the SDK's own metrics
+or from the server. A diagnosis line names the bottleneck: slot-, poller-,
+CPU-, GIL- or downstream-bound, or cache thrash.
+
+Two findings from building it:
+- A CPU-starved Worker looks **poller-bound**: its slots sit free because the
+  pollers are starved too.
+- In Python, CPU-bound Activities starve **Workflow Tasks** through the GIL.
+  More slots make that worse.
+
+Details: [`demo/lab/README.md`](demo/lab/README.md).
+
+---
+
 ## Why this exists
 
 Temporal is durable, so it does not drop work — it *queues* it. Which means a

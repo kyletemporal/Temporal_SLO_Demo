@@ -361,36 +361,36 @@ groups:
       - record: slo:sli_bad:ratio_rate5m
         expr: |
           1 - (
-            sum(rate(temporal_activity_schedule_to_start_latency_seconds_bucket{le="0.2"}[5m]))
+            sum(rate(temporal_activity_schedule_to_start_latency_seconds_bucket{le="0.2", namespace="default"}[5m]))
             /
-            sum(rate(temporal_activity_schedule_to_start_latency_seconds_count[5m]))
+            sum(rate(temporal_activity_schedule_to_start_latency_seconds_count{namespace="default"}[5m]))
           )
         labels:
           sli: worker_task_delivery
       - record: slo:sli_bad:ratio_rate30m
         expr: |
           1 - (
-            sum(rate(temporal_activity_schedule_to_start_latency_seconds_bucket{le="0.2"}[30m]))
+            sum(rate(temporal_activity_schedule_to_start_latency_seconds_bucket{le="0.2", namespace="default"}[30m]))
             /
-            sum(rate(temporal_activity_schedule_to_start_latency_seconds_count[30m]))
+            sum(rate(temporal_activity_schedule_to_start_latency_seconds_count{namespace="default"}[30m]))
           )
         labels:
           sli: worker_task_delivery
       - record: slo:sli_bad:ratio_rate1h
         expr: |
           1 - (
-            sum(rate(temporal_activity_schedule_to_start_latency_seconds_bucket{le="0.2"}[1h]))
+            sum(rate(temporal_activity_schedule_to_start_latency_seconds_bucket{le="0.2", namespace="default"}[1h]))
             /
-            sum(rate(temporal_activity_schedule_to_start_latency_seconds_count[1h]))
+            sum(rate(temporal_activity_schedule_to_start_latency_seconds_count{namespace="default"}[1h]))
           )
         labels:
           sli: worker_task_delivery
       - record: slo:sli_bad:ratio_rate6h
         expr: |
           1 - (
-            sum(rate(temporal_activity_schedule_to_start_latency_seconds_bucket{le="0.2"}[6h]))
+            sum(rate(temporal_activity_schedule_to_start_latency_seconds_bucket{le="0.2", namespace="default"}[6h]))
             /
-            sum(rate(temporal_activity_schedule_to_start_latency_seconds_count[6h]))
+            sum(rate(temporal_activity_schedule_to_start_latency_seconds_count{namespace="default"}[6h]))
           )
         labels:
           sli: worker_task_delivery
@@ -399,18 +399,18 @@ groups:
       - record: slo:sli_bad:ratio_rate5m
         expr: |
           (
-            (sum(rate(workflow_failed[5m])) or (sum(rate(workflow_success[5m])) or sum(rate(workflow_failed[5m])) or sum(rate(workflow_timeout[5m]))) * 0)
+            (sum(rate(workflow_failed{namespace="default"}[5m])) or (sum(rate(workflow_success{namespace="default"}[5m])) or sum(rate(workflow_failed{namespace="default"}[5m])) or sum(rate(workflow_timeout{namespace="default"}[5m]))) * 0)
             +
-            (sum(rate(workflow_timeout[5m])) or (sum(rate(workflow_success[5m])) or sum(rate(workflow_failed[5m])) or sum(rate(workflow_timeout[5m]))) * 0)
+            (sum(rate(workflow_timeout{namespace="default"}[5m])) or (sum(rate(workflow_success{namespace="default"}[5m])) or sum(rate(workflow_failed{namespace="default"}[5m])) or sum(rate(workflow_timeout{namespace="default"}[5m]))) * 0)
           )
           /
           clamp_min(
             (
-            (sum(rate(workflow_success[5m])) or (sum(rate(workflow_success[5m])) or sum(rate(workflow_failed[5m])) or sum(rate(workflow_timeout[5m]))) * 0)
+            (sum(rate(workflow_success{namespace="default"}[5m])) or (sum(rate(workflow_success{namespace="default"}[5m])) or sum(rate(workflow_failed{namespace="default"}[5m])) or sum(rate(workflow_timeout{namespace="default"}[5m]))) * 0)
             +
-            (sum(rate(workflow_failed[5m])) or (sum(rate(workflow_success[5m])) or sum(rate(workflow_failed[5m])) or sum(rate(workflow_timeout[5m]))) * 0)
+            (sum(rate(workflow_failed{namespace="default"}[5m])) or (sum(rate(workflow_success{namespace="default"}[5m])) or sum(rate(workflow_failed{namespace="default"}[5m])) or sum(rate(workflow_timeout{namespace="default"}[5m]))) * 0)
             +
-            (sum(rate(workflow_timeout[5m])) or (sum(rate(workflow_success[5m])) or sum(rate(workflow_failed[5m])) or sum(rate(workflow_timeout[5m]))) * 0)
+            (sum(rate(workflow_timeout{namespace="default"}[5m])) or (sum(rate(workflow_success{namespace="default"}[5m])) or sum(rate(workflow_failed{namespace="default"}[5m])) or sum(rate(workflow_timeout{namespace="default"}[5m]))) * 0)
           ),
             0.001
           )
@@ -419,18 +419,18 @@ groups:
       - record: slo:sli_bad:ratio_rate30m
         expr: |
           (
-            (sum(rate(workflow_failed[30m])) or (sum(rate(workflow_success[30m])) or sum(rate(workflow_failed[30m])) or sum(rate(workflow_timeout[30m]))) * 0)
+            (sum(rate(workflow_failed{namespace="default"}[30m])) or (sum(rate(workflow_success{namespace="default"}[30m])) or sum(rate(workflow_failed{namespace="default"}[30m])) or sum(rate(workflow_timeout{namespace="default"}[30m]))) * 0)
             +
-            (sum(rate(workflow_timeout[30m])) or (sum(rate(workflow_success[30m])) or sum(rate(workflow_failed[30m])) or sum(rate(workflow_timeout[30m]))) * 0)
+            (sum(rate(workflow_timeout{namespace="default"}[30m])) or (sum(rate(workflow_success{namespace="default"}[30m])) or sum(rate(workflow_failed{namespace="default"}[30m])) or sum(rate(workflow_timeout{namespace="default"}[30m]))) * 0)
           )
           /
           clamp_min(
             (
-            (sum(rate(workflow_success[30m])) or (sum(rate(workflow_success[30m])) or sum(rate(workflow_failed[30m])) or sum(rate(workflow_timeout[30m]))) * 0)
+            (sum(rate(workflow_success{namespace="default"}[30m])) or (sum(rate(workflow_success{namespace="default"}[30m])) or sum(rate(workflow_failed{namespace="default"}[30m])) or sum(rate(workflow_timeout{namespace="default"}[30m]))) * 0)
             +
-            (sum(rate(workflow_failed[30m])) or (sum(rate(workflow_success[30m])) or sum(rate(workflow_failed[30m])) or sum(rate(workflow_timeout[30m]))) * 0)
+            (sum(rate(workflow_failed{namespace="default"}[30m])) or (sum(rate(workflow_success{namespace="default"}[30m])) or sum(rate(workflow_failed{namespace="default"}[30m])) or sum(rate(workflow_timeout{namespace="default"}[30m]))) * 0)
             +
-            (sum(rate(workflow_timeout[30m])) or (sum(rate(workflow_success[30m])) or sum(rate(workflow_failed[30m])) or sum(rate(workflow_timeout[30m]))) * 0)
+            (sum(rate(workflow_timeout{namespace="default"}[30m])) or (sum(rate(workflow_success{namespace="default"}[30m])) or sum(rate(workflow_failed{namespace="default"}[30m])) or sum(rate(workflow_timeout{namespace="default"}[30m]))) * 0)
           ),
             0.001
           )
@@ -439,18 +439,18 @@ groups:
       - record: slo:sli_bad:ratio_rate1h
         expr: |
           (
-            (sum(rate(workflow_failed[1h])) or (sum(rate(workflow_success[1h])) or sum(rate(workflow_failed[1h])) or sum(rate(workflow_timeout[1h]))) * 0)
+            (sum(rate(workflow_failed{namespace="default"}[1h])) or (sum(rate(workflow_success{namespace="default"}[1h])) or sum(rate(workflow_failed{namespace="default"}[1h])) or sum(rate(workflow_timeout{namespace="default"}[1h]))) * 0)
             +
-            (sum(rate(workflow_timeout[1h])) or (sum(rate(workflow_success[1h])) or sum(rate(workflow_failed[1h])) or sum(rate(workflow_timeout[1h]))) * 0)
+            (sum(rate(workflow_timeout{namespace="default"}[1h])) or (sum(rate(workflow_success{namespace="default"}[1h])) or sum(rate(workflow_failed{namespace="default"}[1h])) or sum(rate(workflow_timeout{namespace="default"}[1h]))) * 0)
           )
           /
           clamp_min(
             (
-            (sum(rate(workflow_success[1h])) or (sum(rate(workflow_success[1h])) or sum(rate(workflow_failed[1h])) or sum(rate(workflow_timeout[1h]))) * 0)
+            (sum(rate(workflow_success{namespace="default"}[1h])) or (sum(rate(workflow_success{namespace="default"}[1h])) or sum(rate(workflow_failed{namespace="default"}[1h])) or sum(rate(workflow_timeout{namespace="default"}[1h]))) * 0)
             +
-            (sum(rate(workflow_failed[1h])) or (sum(rate(workflow_success[1h])) or sum(rate(workflow_failed[1h])) or sum(rate(workflow_timeout[1h]))) * 0)
+            (sum(rate(workflow_failed{namespace="default"}[1h])) or (sum(rate(workflow_success{namespace="default"}[1h])) or sum(rate(workflow_failed{namespace="default"}[1h])) or sum(rate(workflow_timeout{namespace="default"}[1h]))) * 0)
             +
-            (sum(rate(workflow_timeout[1h])) or (sum(rate(workflow_success[1h])) or sum(rate(workflow_failed[1h])) or sum(rate(workflow_timeout[1h]))) * 0)
+            (sum(rate(workflow_timeout{namespace="default"}[1h])) or (sum(rate(workflow_success{namespace="default"}[1h])) or sum(rate(workflow_failed{namespace="default"}[1h])) or sum(rate(workflow_timeout{namespace="default"}[1h]))) * 0)
           ),
             0.001
           )
@@ -459,18 +459,18 @@ groups:
       - record: slo:sli_bad:ratio_rate6h
         expr: |
           (
-            (sum(rate(workflow_failed[6h])) or (sum(rate(workflow_success[6h])) or sum(rate(workflow_failed[6h])) or sum(rate(workflow_timeout[6h]))) * 0)
+            (sum(rate(workflow_failed{namespace="default"}[6h])) or (sum(rate(workflow_success{namespace="default"}[6h])) or sum(rate(workflow_failed{namespace="default"}[6h])) or sum(rate(workflow_timeout{namespace="default"}[6h]))) * 0)
             +
-            (sum(rate(workflow_timeout[6h])) or (sum(rate(workflow_success[6h])) or sum(rate(workflow_failed[6h])) or sum(rate(workflow_timeout[6h]))) * 0)
+            (sum(rate(workflow_timeout{namespace="default"}[6h])) or (sum(rate(workflow_success{namespace="default"}[6h])) or sum(rate(workflow_failed{namespace="default"}[6h])) or sum(rate(workflow_timeout{namespace="default"}[6h]))) * 0)
           )
           /
           clamp_min(
             (
-            (sum(rate(workflow_success[6h])) or (sum(rate(workflow_success[6h])) or sum(rate(workflow_failed[6h])) or sum(rate(workflow_timeout[6h]))) * 0)
+            (sum(rate(workflow_success{namespace="default"}[6h])) or (sum(rate(workflow_success{namespace="default"}[6h])) or sum(rate(workflow_failed{namespace="default"}[6h])) or sum(rate(workflow_timeout{namespace="default"}[6h]))) * 0)
             +
-            (sum(rate(workflow_failed[6h])) or (sum(rate(workflow_success[6h])) or sum(rate(workflow_failed[6h])) or sum(rate(workflow_timeout[6h]))) * 0)
+            (sum(rate(workflow_failed{namespace="default"}[6h])) or (sum(rate(workflow_success{namespace="default"}[6h])) or sum(rate(workflow_failed{namespace="default"}[6h])) or sum(rate(workflow_timeout{namespace="default"}[6h]))) * 0)
             +
-            (sum(rate(workflow_timeout[6h])) or (sum(rate(workflow_success[6h])) or sum(rate(workflow_failed[6h])) or sum(rate(workflow_timeout[6h]))) * 0)
+            (sum(rate(workflow_timeout{namespace="default"}[6h])) or (sum(rate(workflow_success{namespace="default"}[6h])) or sum(rate(workflow_failed{namespace="default"}[6h])) or sum(rate(workflow_timeout{namespace="default"}[6h]))) * 0)
           ),
             0.001
           )

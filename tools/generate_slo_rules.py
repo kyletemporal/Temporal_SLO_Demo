@@ -84,6 +84,16 @@ def slow_requests(svc, le):
     ).format(svc=svc, le=le, np=NOT_LONG_POLL)
 
 
+# The demo APPLICATION's namespace. Application-tier SLIs are scoped to it so
+# that other workloads on the same cluster cannot spend this app's budget —
+# in particular the Worker tuning lab (namespace "lab", demo/lab), whose
+# presets create bottlenecks on purpose: one slot-constrained run measured a
+# 37.7s schedule-to-start, which unscoped would have drained
+# worker_task_delivery in minutes. Platform-tier SLIs (frontend, history,
+# matching, persistence) are deliberately NOT scoped: lab traffic is real load
+# on the real server, and when it degrades the server those budgets should burn.
+APP_NS = 'namespace="default"'
+
 SLIS = [
     dict(name="frontend_availability", objective=0.999, by=None,
          desc="Frontend gRPC requests that did not return an error",
@@ -134,9 +144,9 @@ SLIS = [
          desc="Activity Tasks picked up by a Worker within 200ms of scheduling",
          expr=(
              '1 - (\n'
-             '            sum(rate(temporal_activity_schedule_to_start_latency_seconds_bucket{le="0.2"}[{w}]))\n'
+             f'            sum(rate(temporal_activity_schedule_to_start_latency_seconds_bucket{{le="0.2", {APP_NS}}}[{{w}}]))\n'
              '            /\n'
-             '            sum(rate(temporal_activity_schedule_to_start_latency_seconds_count[{w}]))\n'
+             f'            sum(rate(temporal_activity_schedule_to_start_latency_seconds_count{{{APP_NS}}}[{{w}}]))\n'
              '          )'
          )),
     # Application-level, from cluster metrics (history service), so it keeps
@@ -154,7 +164,9 @@ SLIS = [
          # tools/promql_guards.py.
          expr="{bad}\n          /\n          clamp_min(\n            {total},\n            0.001\n          )".format(
              **dict(zip(("bad", "total"), outcome_ratio_terms(
-                 {"success": "workflow_success", "failed": "workflow_failed", "timeout": "workflow_timeout"},
+                 {"success": f"workflow_success{{{APP_NS}}}",
+                  "failed": f"workflow_failed{{{APP_NS}}}",
+                  "timeout": f"workflow_timeout{{{APP_NS}}}"},
                  bad=("failed", "timeout"),
                  wrap="sum(rate({}[{{w}}]))"))))),
 ]

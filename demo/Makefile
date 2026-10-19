@@ -3,6 +3,10 @@ SHELL := /bin/bash
 
 K6 := docker compose --profile tools run --rm k6 run
 
+# Every optional profile. Used by `down`/`reset` so profiled services are
+# stopped with the rest of the stack instead of being left running.
+ALL_PROFILES := --profile lab --profile langchain --profile tools
+
 .PHONY: help
 help: ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | \
@@ -24,13 +28,17 @@ up: ## Build and start the full stack
 
 .PHONY: down
 down: ## Stop the stack, KEEPING metrics and logs
-	@# No -v. Error budgets are cumulative over 28 days and are worthless if a
-	@# routine stop wipes them. `make reset` is the destructive one.
-	docker compose down
+	@# No -v: a routine stop must not wipe Prometheus history, or every SLO
+	@# window restarts empty. `make reset` is the destructive one.
+	@#
+	@# The profiles are listed so their containers stop too. Without them,
+	@# `down` (even `down -v --remove-orphans`) leaves the lab and langchain
+	@# Workers running and fails to remove the network ("still in use").
+	docker compose $(ALL_PROFILES) down
 
 .PHONY: reset
 reset: ## Stop the stack and DELETE all metrics, logs and database state
-	docker compose down -v
+	docker compose $(ALL_PROFILES) down -v
 
 .PHONY: logs
 logs: ## Tail logs for the demo app
@@ -344,3 +352,32 @@ dashboards-check: ## Run every dashboard query against live Prometheus, report e
 	@cd .. && for d in demo/grafana/dashboards/custom/*.json demo/grafana/dashboards/slo/*.json; do \
 		python3 tools/check_dashboard_queries.py "$$d" || true; echo; \
 	done
+
+# -----------------------------------------------------------------------------
+# Worker tuning lab — live UI over real Workers (see lab/README.md)
+# -----------------------------------------------------------------------------
+.PHONY: lab
+lab: ## Start the Worker tuning lab UI at http://localhost:8095 (Go + Python Workers)
+	docker compose --profile lab up -d --build lab-controller lab-worker-go lab-worker-python
+	@echo "==> Worker tuning lab: http://localhost:8095  (starts idle — press Start load)"
+
+.PHONY: lab-down
+lab-down: ## Stop the tuning lab and terminate any lab Workflows still running
+	-docker compose --profile lab stop lab-controller lab-worker-go lab-worker-python
+	@docker exec tobs-temporal sh -c 'export TEMPORAL_ADDRESS=$$(hostname -i | cut -d" " -f1):7233; \
+	  temporal workflow terminate --namespace lab \
+	    --query "ExecutionStatus=\"Running\"" \
+	    --reason "make lab-down" --yes' 2>/dev/null || true
+
+.PHONY: lab-slow-db
+lab-slow-db: ## Lab: cap Postgres at 0.3 CPU to make the server the bottleneck (server-bound)
+	docker update --cpus 0.3 tobs-postgres >/dev/null
+	@echo "==> Postgres capped at 0.3 CPU. Run load in the lab and watch the diagnosis turn server-bound."
+	@echo "    REQUIRED cleanup: make lab-fast-db"
+
+.PHONY: lab-fast-db
+lab-fast-db: ## Lab: REQUIRED cleanup for lab-slow-db — lift the Postgres CPU cap
+	@# `docker update --cpus 0` does not clear a limit (verified: it stayed at 0.3),
+	@# so set it to every CPU Docker has, which is no limit in practice.
+	docker update --cpus $$(docker info --format '{{.NCPU}}') tobs-postgres >/dev/null
+	@echo "==> Postgres CPU limit lifted ($$(docker info --format '{{.NCPU}}') CPUs)"
