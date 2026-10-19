@@ -342,7 +342,7 @@ go: go.temporal.io/sdk@v1.47.0 requires go >= 1.25.4 (running go 1.23.12; GOTOOL
 ```
 
 The Temporal SDK raised its minimum Go version above the builder image. Bump the
-tag at the top of `app/Dockerfile` (`FROM golang:1.25-alpine`) to meet the
+tag at the top of `app/Dockerfile` (`FROM golang:1.26-alpine`) to meet the
 version in the error and rerun. The alpine images set `GOTOOLCHAIN=local`, which
 is why this fails loudly instead of silently downloading a newer toolchain.
 
