@@ -1,0 +1,48 @@
+# promtool unit tests for app-team/prometheus, AS SHIPPED: the label values are
+# the literal $NAMESPACE / $TASK_QUEUE placeholders that configure.sh replaces.
+# Run: tests/promql/run.sh
+rule_files:
+  - ../../app-team/prometheus/slo-rules.yml
+  - ../../app-team/prometheus/alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  # Worker restarted, and every Workflow since has failed: no
+  # temporal_workflow_completed_total series exists. Both the alert and the
+  # fast burn must fire.
+  - interval: 1m
+    input_series:
+      - series: 'temporal_workflow_failed_total{namespace="$NAMESPACE",task_queue="$TASK_QUEUE",workflow_type="Order"}'
+        values: '0+10x80'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: AppWorkflowFailureRatioHigh
+        exp_alerts:
+          - exp_labels: {severity: page, component: temporal-app}
+            exp_annotations:
+              summary: "Over 5% of Workflows failing on $TASK_QUEUE"
+              description: "Terminal Workflow failures, not absorbed Activity retries. Check retry policies (MaximumAttempts=1 turns every Activity failure into a Workflow failure) and whether your Workflow handles its failure paths at all."
+      - eval_time: 70m
+        alertname: AppSLOFastBurn
+        exp_alerts:
+          - exp_labels: {severity: page, component: temporal-app, sli: workflow_completion}
+            exp_annotations:
+              summary: "workflow_completion is burning error budget 14.4x too fast"
+              description: "At this rate the whole 28-day budget is gone in about two days."
+
+  # Healthy, failure counter never created: SLI reads 0, nothing fires.
+  - interval: 1m
+    input_series:
+      - series: 'temporal_workflow_completed_total{namespace="$NAMESPACE",task_queue="$TASK_QUEUE",workflow_type="Order"}'
+        values: '0+10x80'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: AppWorkflowFailureRatioHigh
+        exp_alerts: []
+    promql_expr_test:
+      - expr: appslo:sli_bad:ratio_rate5m{sli="workflow_completion"}
+        eval_time: 70m
+        exp_samples:
+          - labels: 'appslo:sli_bad:ratio_rate5m{sli="workflow_completion"}'
+            value: 0

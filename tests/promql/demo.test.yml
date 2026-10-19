@@ -1,0 +1,41 @@
+# promtool unit tests for demo/prometheus/slo-rules.yml. Run: tests/promql/run.sh
+# See production.test.yml for why the no-series cases are the ones that matter.
+rule_files:
+  - ../../demo/prometheus/slo-rules.yml
+
+evaluation_interval: 1m
+
+tests:
+  # Total outage: workflow_success never appears. The SLI must read 1 and the
+  # burn rate 100x (1 / the 0.01 budget), not be absent.
+  - interval: 1m
+    input_series:
+      - series: 'workflow_failed{namespace="default",instance="temporal:8000"}'
+        values: '0+10x40'
+      - series: 'workflow_timeout{namespace="default",instance="temporal:8000"}'
+        values: '0+10x40'
+    promql_expr_test:
+      - expr: slo:sli_bad:ratio_rate5m{sli="workflow_completion"}
+        eval_time: 30m
+        exp_samples:
+          - labels: 'slo:sli_bad:ratio_rate5m{sli="workflow_completion"}'
+            value: 1
+      # 1 / (1 - 0.99) is 99.99999999999991 in float64; assert the threshold
+      # the fast-burn alert actually uses rather than an exact 100.
+      - expr: slo:burn_rate:ratio_rate5m{sli="workflow_completion"} > bool 14.4
+        eval_time: 30m
+        exp_samples:
+          - labels: '{sli="workflow_completion"}'
+            value: 1
+
+  # Healthy, and no failure counter has ever been created.
+  - interval: 1m
+    input_series:
+      - series: 'workflow_success{namespace="default",instance="temporal:8000"}'
+        values: '0+100x40'
+    promql_expr_test:
+      - expr: slo:sli_bad:ratio_rate5m{sli="workflow_completion"}
+        eval_time: 30m
+        exp_samples:
+          - labels: 'slo:sli_bad:ratio_rate5m{sli="workflow_completion"}'
+            value: 0

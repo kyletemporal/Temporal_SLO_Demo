@@ -26,25 +26,26 @@ groups:
       # Activity failures through retries — alerting on Activity failure count
       # guarantees false pages. Only a terminal Workflow outcome is a signal.
       #
-      # The `or ... * 0` guard is load-bearing: temporal_workflow_failed_total
-      # DOES NOT EXIST until your first failure, so the naive form returns
-      # nothing — no series, no alert — exactly when everything is failing.
+      # The guards are load-bearing: temporal_workflow_failed_total DOES NOT
+      # EXIST until your first failure, and after a Worker restart
+      # temporal_workflow_completed_total does not exist until the first
+      # success. Each term is guarded against the UNION of both
+      # (tools/promql_guards.py). The previous guard borrowed the success
+      # series, so when nothing was succeeding the alert returned nothing —
+      # exactly the case it claimed to cover. Pinned by
+      # tests/promql/app-team.test.yml.
       # -----------------------------------------------------------------------
       - alert: AppWorkflowFailureRatioHigh
         expr: |
           (
-            sum(rate(temporal_workflow_failed_total{namespace="$NAMESPACE", task_queue="$TASK_QUEUE"}[5m]))
-            or
-            sum(rate(temporal_workflow_completed_total{namespace="$NAMESPACE", task_queue="$TASK_QUEUE"}[5m])) * 0
+            (sum(rate(temporal_workflow_failed_total{namespace="$NAMESPACE", task_queue="$TASK_QUEUE"}[5m])) or (sum(rate(temporal_workflow_completed_total{namespace="$NAMESPACE", task_queue="$TASK_QUEUE"}[5m])) or sum(rate(temporal_workflow_failed_total{namespace="$NAMESPACE", task_queue="$TASK_QUEUE"}[5m]))) * 0)
           )
           /
           clamp_min(
-            sum(rate(temporal_workflow_completed_total{namespace="$NAMESPACE", task_queue="$TASK_QUEUE"}[5m]))
-            +
             (
-              sum(rate(temporal_workflow_failed_total{namespace="$NAMESPACE", task_queue="$TASK_QUEUE"}[5m]))
-              or
-              sum(rate(temporal_workflow_completed_total{namespace="$NAMESPACE", task_queue="$TASK_QUEUE"}[5m])) * 0
+              (sum(rate(temporal_workflow_completed_total{namespace="$NAMESPACE", task_queue="$TASK_QUEUE"}[5m])) or (sum(rate(temporal_workflow_completed_total{namespace="$NAMESPACE", task_queue="$TASK_QUEUE"}[5m])) or sum(rate(temporal_workflow_failed_total{namespace="$NAMESPACE", task_queue="$TASK_QUEUE"}[5m]))) * 0)
+              +
+              (sum(rate(temporal_workflow_failed_total{namespace="$NAMESPACE", task_queue="$TASK_QUEUE"}[5m])) or (sum(rate(temporal_workflow_completed_total{namespace="$NAMESPACE", task_queue="$TASK_QUEUE"}[5m])) or sum(rate(temporal_workflow_failed_total{namespace="$NAMESPACE", task_queue="$TASK_QUEUE"}[5m]))) * 0)
             ),
             0.001
           )

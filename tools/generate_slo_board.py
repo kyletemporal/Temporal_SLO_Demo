@@ -321,7 +321,7 @@ panels.append(panel(
     [target("slo:burn_rate:ratio_rate1h", legend="{{sli}} {{service_name}}")],
     unit="none",
     desc=("Multiples of sustainable budget consumption. 1.0 exhausts the budget "
-          "exactly at the end of the window. 14.4 exhausts it in about 2 hours of "
+          "exactly at the end of the window. 14.4 exhausts it in about two days of "
           "a 30-day window — the standard fast-burn paging threshold. Below 1.0 "
           "you are spending less than you are allowed."),
     thr=burn_thr,

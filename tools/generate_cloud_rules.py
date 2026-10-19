@@ -2,6 +2,8 @@
 """Generate the Temporal CLOUD SLO rule file."""
 import pathlib
 
+from promql_guards import outcome_ratio_terms
+
 import pathlib
 OUT = str(pathlib.Path(__file__).resolve().parent.parent / "cloud/prometheus/slo-rules.yml")
 
@@ -15,15 +17,37 @@ COMPLIANCE = "28d"
 # single slowest request.
 MIN_RPS = "0.33"   # ~20 requests/minute, the threshold the docs cite
 
+# Every SLI is aggregated per Namespace EXPLICITLY. The metrics carry
+# different label sets — request/error counts have `operation`, activity
+# timeouts add `timeout_type`, task metrics add `temporal_task_queue` and
+# `task_type` — and a bare `+` or `/` between them matches nothing and returns
+# EMPTY, not a wrong number. task_delivery and activity_completion both shipped
+# that way. Summing to `temporal_namespace` first makes every pair line up.
+# Labels per https://docs.temporal.io/cloud/metrics/openmetrics/metrics-reference
+NS = "sum by (temporal_namespace) ({})"
+AVG = "sum by (temporal_namespace) (avg_over_time({}[5m]))"
+
+_wf_bad, _wf_total = outcome_ratio_terms(
+    {"success": "temporal_cloud_v1_workflow_success_count",
+     "failed": "temporal_cloud_v1_workflow_failed_count",
+     "timeout": "temporal_cloud_v1_workflow_timeout_count"},
+    bad=("failed", "timeout"), wrap=AVG)
+_act_bad, _act_total = outcome_ratio_terms(
+    {"success": "temporal_cloud_v1_activity_success_count",
+     "fail": "temporal_cloud_v1_activity_fail_count",
+     "timeout": "temporal_cloud_v1_activity_timeout_count"},
+    bad=("fail", "timeout"), wrap=AVG)
+
 SLIS = [
     # ---------------------------------------------------------------------
     # Mirrors the SLA's own formula: 1 - (errors / requests) per Namespace.
+    # Errors are a subset of requests, so guarding on requests is safe here.
     # ---------------------------------------------------------------------
     dict(name="cloud_service_availability", objective=0.999,
          desc="gRPC requests to the Namespace that did not return a service error",
-         bad='avg_over_time(temporal_cloud_v1_service_error_count[5m])\n'
-             '            or avg_over_time(temporal_cloud_v1_service_request_count[5m]) * 0',
-         total='avg_over_time(temporal_cloud_v1_service_request_count[5m])',
+         bad=f'{AVG.format("temporal_cloud_v1_service_error_count")}\n'
+             f'            or {AVG.format("temporal_cloud_v1_service_request_count")} * 0',
+         total=AVG.format("temporal_cloud_v1_service_request_count"),
          by="temporal_namespace"),
 
     # ---------------------------------------------------------------------
@@ -31,64 +55,50 @@ SLIS = [
     # bucket, so this is not a good/total ratio — it is "was p95 under target".
     # Expressed as a bad-event ratio of 0 or 1 so it flows through the same
     # budget machinery, gated on having enough traffic to mean anything.
+    # The percentile itself is never aggregated; only the 0/1 verdicts are.
     # ---------------------------------------------------------------------
     dict(name="cloud_start_workflow_latency", objective=0.99,
          desc="Minutes where StartWorkflowExecution p95 stayed under 500ms",
-         bad='(\n'
-             '            (temporal_cloud_v1_service_latency_p95{operation="StartWorkflowExecution"} > bool 0.5)\n'
+         bad=NS.format(
+             '\n            (temporal_cloud_v1_service_latency_p95{operation="StartWorkflowExecution"} > bool 0.5)\n'
              f'            and (temporal_cloud_v1_service_request_count{{operation="StartWorkflowExecution"}} > {MIN_RPS})\n'
-             '          )',
-         total=f'(temporal_cloud_v1_service_request_count{{operation="StartWorkflowExecution"}} > bool {MIN_RPS})',
+             '          '),
+         total=NS.format(f'temporal_cloud_v1_service_request_count{{operation="StartWorkflowExecution"}} > bool {MIN_RPS}'),
          by="temporal_namespace"),
 
     # ---------------------------------------------------------------------
     # Application outcome. Timeouts count as bad; cancellations do not —
-    # a cancellation is somebody getting what they asked for.
+    # a cancellation is somebody getting what they asked for. Guarded against
+    # the union of outcomes (tools/promql_guards.py): the old success-based
+    # guard went EMPTY in a total outage.
     # ---------------------------------------------------------------------
     dict(name="workflow_completion", objective=0.99,
          desc="Workflow Executions completing successfully; timeouts count as bad",
-         bad='(\n'
-             '            (avg_over_time(temporal_cloud_v1_workflow_failed_count[5m])  or avg_over_time(temporal_cloud_v1_workflow_success_count[5m]) * 0)\n'
-             '            +\n'
-             '            (avg_over_time(temporal_cloud_v1_workflow_timeout_count[5m]) or avg_over_time(temporal_cloud_v1_workflow_success_count[5m]) * 0)\n'
-             '          )',
-         total='(\n'
-               '            avg_over_time(temporal_cloud_v1_workflow_success_count[5m])\n'
-               '            +\n'
-               '            (avg_over_time(temporal_cloud_v1_workflow_failed_count[5m])  or avg_over_time(temporal_cloud_v1_workflow_success_count[5m]) * 0)\n'
-               '            +\n'
-               '            (avg_over_time(temporal_cloud_v1_workflow_timeout_count[5m]) or avg_over_time(temporal_cloud_v1_workflow_success_count[5m]) * 0)\n'
-               '          )',
-         by="temporal_namespace"),
+         bad=_wf_bad, total=_wf_total, by="temporal_namespace"),
 
     dict(name="activity_completion", objective=0.99,
          desc="Activity Executions completing successfully; timeouts count as bad",
-         bad='(\n'
-             '            (avg_over_time(temporal_cloud_v1_activity_fail_count[5m])    or avg_over_time(temporal_cloud_v1_activity_success_count[5m]) * 0)\n'
-             '            +\n'
-             '            (avg_over_time(temporal_cloud_v1_activity_timeout_count[5m]) or avg_over_time(temporal_cloud_v1_activity_success_count[5m]) * 0)\n'
-             '          )',
-         total='(\n'
-               '            avg_over_time(temporal_cloud_v1_activity_success_count[5m])\n'
-               '            +\n'
-               '            (avg_over_time(temporal_cloud_v1_activity_fail_count[5m])    or avg_over_time(temporal_cloud_v1_activity_success_count[5m]) * 0)\n'
-               '            +\n'
-               '            (avg_over_time(temporal_cloud_v1_activity_timeout_count[5m]) or avg_over_time(temporal_cloud_v1_activity_success_count[5m]) * 0)\n'
-               '          )',
-         by="temporal_namespace"),
+         bad=_act_bad, total=_act_total, by="temporal_namespace"),
 
     # ---------------------------------------------------------------------
-    # Task delivery. no_poller_tasks is the fraction of Tasks landing on a
-    # queue with nobody listening — on Cloud this is YOUR fault, not
-    # Temporal's, because you run the Workers.
+    # Task delivery. no_poller_tasks is the rate of Tasks added to a queue
+    # with nobody listening — on Cloud this is YOUR fault, not Temporal's,
+    # because you run the Workers.
+    #
+    # Denominator: Tasks matched to a poller (poll_success) plus Tasks that
+    # found no poller — both are TASKS. The previous denominator added
+    # Workflow completions to Tasks (different units AND different labels, so
+    # it matched nothing and this SLI was always empty). Approximate: a
+    # no-poller Task can be matched later and then counts on both sides.
     # ---------------------------------------------------------------------
     dict(name="task_delivery", objective=0.999,
          desc="Tasks arriving on a Task Queue that had an active poller",
-         bad='avg_over_time(temporal_cloud_v1_no_poller_tasks_count[5m])\n'
-             '            or avg_over_time(temporal_cloud_v1_service_request_count[5m]) * 0',
+         bad=f'{AVG.format("temporal_cloud_v1_no_poller_tasks_count")}\n'
+             f'            or {AVG.format("temporal_cloud_v1_poll_success_count")} * 0',
          total='(\n'
-               '            avg_over_time(temporal_cloud_v1_no_poller_tasks_count[5m])\n'
-               '            + avg_over_time(temporal_cloud_v1_workflow_success_count[5m])\n'
+               f'            {AVG.format("temporal_cloud_v1_poll_success_count")}\n'
+               '            +\n'
+               f'            ({AVG.format("temporal_cloud_v1_no_poller_tasks_count")} or {AVG.format("temporal_cloud_v1_poll_success_count")} * 0)\n'
                '          )',
          by="temporal_namespace"),
 ]
@@ -227,7 +237,7 @@ def emit():
         labels: {{severity: page, component: temporal-cloud-slo}}
         annotations:
           summary: "{{{{ $labels.sli }}}} burning budget 14.4x in {{{{ $labels.temporal_namespace }}}}"
-          description: "The entire {COMPLIANCE} budget goes in about two hours at this rate. If cloud_service_availability is the SLI, check https://status.temporal.io before assuming it is yours."
+          description: "The entire {COMPLIANCE} budget goes in about two days at this rate (14.4x a 28-day budget lasts ~47 hours). If cloud_service_availability is the SLI, check https://status.temporal.io before assuming it is yours."
 
       - alert: CloudSLOSlowBurn
         expr: |

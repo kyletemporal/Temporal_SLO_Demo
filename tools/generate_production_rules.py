@@ -2,6 +2,8 @@
 """Generate the production SLO rule file."""
 import pathlib
 
+from promql_guards import outcome_ratio_terms
+
 OUT = str(pathlib.Path(__file__).resolve().parent.parent / "production/prometheus/slo-rules.yml")
 
 # Alert windows for multi-window multi-burn-rate, plus the compliance window.
@@ -64,19 +66,15 @@ SLIS = [
          sli=lat_sli("frontend", True)),
     dict(name="workflow_completion", objective=0.99, tier="tenant",
          desc="Workflows reaching successful completion; timeouts count as bad",
-         sli=(
-             '(\n'
-             f'            (sum by (namespace) (rate(workflow_failed{{{TENANT}}}[5m]))  or sum by (namespace) (rate(workflow_success{{{TENANT}}}[5m])) * 0)\n'
-             f'            +\n'
-             f'            (sum by (namespace) (rate(workflow_timeout{{{TENANT}}}[5m])) or sum by (namespace) (rate(workflow_success{{{TENANT}}}[5m])) * 0)\n'
-             '          )',
-             '(\n'
-             f'            sum by (namespace) (rate(workflow_success{{{TENANT}}}[5m]))\n'
-             f'            +\n'
-             f'            (sum by (namespace) (rate(workflow_failed{{{TENANT}}}[5m]))  or sum by (namespace) (rate(workflow_success{{{TENANT}}}[5m])) * 0)\n'
-             f'            +\n'
-             f'            (sum by (namespace) (rate(workflow_timeout{{{TENANT}}}[5m])) or sum by (namespace) (rate(workflow_success{{{TENANT}}}[5m])) * 0)\n'
-             '          )')),
+         # Guarded against the union of outcomes, not against success: the old
+         # success-based guard went EMPTY in a total outage. See
+         # tools/promql_guards.py.
+         sli=outcome_ratio_terms(
+             {"success": f"workflow_success{{{TENANT}}}",
+              "failed": f"workflow_failed{{{TENANT}}}",
+              "timeout": f"workflow_timeout{{{TENANT}}}"},
+             bad=("failed", "timeout"),
+             wrap="sum by (namespace) (rate({}[5m]))")),
     dict(name="task_delivery", objective=0.99, tier="tenant",
          desc=f"Activity Tasks started within {S2S_LE}s of scheduling",
          sli=(
@@ -253,7 +251,7 @@ def emit():
           component: temporal-slo
         annotations:
           summary: "{{{{ $labels.sli }}}} burning error budget 14.4x (ns={{{{ $labels.namespace }}}})"
-          description: "At this rate the entire {COMPLIANCE} budget is gone in about two hours. Sustained over 1h and still active in the last 5m."
+          description: "At this rate the entire {COMPLIANCE} budget is gone in about two days (14.4x a 28-day budget lasts ~47 hours). Sustained over 1h and still active in the last 5m."
 
       - alert: SLOSlowBurn
         expr: |

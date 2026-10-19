@@ -199,7 +199,7 @@ and alerts pick it up automatically.
 
 **Burn rate** is the number that matters. A burn rate of 1.0 means you are on
 pace to spend exactly 100% of the budget by the end of the window. 14.4 means
-you will spend it in 1/14.4 of the window — about two hours of a 30-day budget.
+you will spend it in 1/14.4 of the window — about two days of a 30-day budget (720h / 14.4 = 50h).
 
 **Budget remaining goes negative**, deliberately. `-0.5` means you spent 150% of
 what you were allowed. Clamping it at zero throws away the only number that
