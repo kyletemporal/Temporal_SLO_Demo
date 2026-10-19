@@ -26,6 +26,7 @@ const (
 type Metrics struct {
 	Running         *prometheus.GaugeVec
 	OverBudget      *prometheus.GaugeVec
+	OverBudgetAtWin *prometheus.GaugeVec
 	Stuck           *prometheus.GaugeVec
 	ClosedInBudget  *prometheus.GaugeVec
 	ClosedOver      *prometheus.GaugeVec
@@ -51,6 +52,17 @@ func New(reg prometheus.Registerer) *Metrics {
 			Namespace: ns, Name: "over_budget_executions",
 			Help: "Open executions running past N x budget.",
 		}, []string{"workflow_type", "task_queue", "bucket"}),
+
+		// The SLI's third denominator term, snapshotted IN THE SAME POLL as the
+		// closed gauges. The fast-loop bucket="1" gauge moves every minute while
+		// the closed gauges move every window_poll_interval; mixing them let a
+		// terminated over-budget execution drop out of over_budget before it
+		// reached closed_over, so terminating one IMPROVED compliance for up to
+		// 10 minutes. Same instant, same counts: it moves between terms at once.
+		OverBudgetAtWin: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: ns, Name: "over_budget_executions_at_window_poll",
+			Help: "Open executions past 1x budget, counted in the same poll as the closed_* gauges.",
+		}, []string{"workflow_type", "task_queue"}),
 
 		Stuck: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Namespace: ns, Name: "stuck_executions",
@@ -112,7 +124,7 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "Unix time of the last successful poll, per type and query kind.",
 		}, []string{"workflow_type", "query_kind"}),
 	}
-	reg.MustRegister(m.Running, m.OverBudget, m.Stuck, m.ClosedInBudget,
+	reg.MustRegister(m.Running, m.OverBudget, m.OverBudgetAtWin, m.Stuck, m.ClosedInBudget,
 		m.ClosedOver, m.BudgetSeconds, m.Objective, m.DetectionAvail, m.PollDuration,
 		m.PollErrors, m.LastSuccessPoll)
 	return m
