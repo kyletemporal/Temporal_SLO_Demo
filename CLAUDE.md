@@ -65,6 +65,9 @@ cd demo/lab && go test ./...        # lab diagnosis pinned to measured cases
 docker build demo/lab/javaworker     # Java tuning flag: TuningFlagTest runs in the build
 python3 tools/generate_worker_tuning_dashboard.py   # Workers — Tuning board (generated)
 cd aws/eks-selfhosted/terraform && terraform test    # mocked-provider plan checks
+git ls-files | while read -r f; do file --mime "$f" | grep -q charset=binary && echo "$f"; done
+                                     # CI rejects committed binaries; only the k6 protoset is allowed
+                                     # (rebuilt and byte-compared). Shipped once without running this.
 ```
 
 ## Traps this repo has already hit
