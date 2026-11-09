@@ -366,17 +366,28 @@ dashboards-check: ## Run every dashboard query against live Prometheus, report e
 # Worker tuning lab — live UI over real Workers (see lab/README.md)
 # -----------------------------------------------------------------------------
 .PHONY: lab
-lab: ## Start the Worker tuning lab UI at http://localhost:8095 (Go + Python Workers)
-	docker compose --profile lab up -d --build lab-controller lab-worker-go lab-worker-python
+lab: ## Start the Worker tuning lab UI at http://localhost:8095 (Go + Python + Java Workers)
+	docker compose --profile lab up -d --build lab-controller lab-worker-go lab-worker-python lab-worker-java
 	@echo "==> Worker tuning lab: http://localhost:8095  (starts idle — press Start load)"
 
 .PHONY: lab-down
 lab-down: ## Stop the tuning lab and terminate any lab Workflows still running
-	-docker compose --profile lab stop lab-controller lab-worker-go lab-worker-python
+	-docker compose --profile lab stop lab-controller lab-worker-go lab-worker-python lab-worker-java
 	@docker exec tobs-temporal sh -c 'export TEMPORAL_ADDRESS=$$(hostname -i | cut -d" " -f1):7233; \
 	  temporal workflow terminate --namespace lab \
 	    --query "ExecutionStatus=\"Running\"" \
 	    --reason "make lab-down" --yes' 2>/dev/null || true
+
+# The customer-shareable test (k6/worker-tuning) aimed at the lab's Java Worker.
+# k6 talks gRPC to the frontend directly, so the same script runs on Cloud.
+.PHONY: k6-tuning
+k6-tuning: ## Stepped k6 load over gRPC to the lab Java Worker (STEPS="2,120 4,120"; needs make lab)
+	docker compose --profile tools run --rm -w /scripts/worker-tuning \
+	  -e TEMPORAL_ADDRESS=temporal:7233 -e TEMPORAL_NAMESPACE=lab -e TASK_QUEUE=lab-java \
+	  -e STEPS="$${STEPS:-2,120 4,120 8,120 16,120}" \
+	  -e K6_PROMETHEUS_RW_SERVER_URL=http://prometheus:9090/api/v1/write \
+	  -e 'K6_PROMETHEUS_RW_TREND_STATS=p(95),p(99),max' \
+	  k6 run -o experimental-prometheus-rw worker-tuning.js
 
 .PHONY: lab-slow-db
 lab-slow-db: ## Lab: cap Postgres at 0.3 CPU to make the server the bottleneck (server-bound)

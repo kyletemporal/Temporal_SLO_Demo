@@ -16,7 +16,8 @@ import (
 //	live     Profile, DurationMs, JitterPct, IOConcurrency, Rate, CPUs (Go):
 //	         read on every Activity / every tick, no restart.
 //	swap     WF/Act Pollers and Slots: the Worker is replaced in place — the
-//	         new one starts polling before the old one drains.
+//	         new one starts polling before the old one drains. On Java, every
+//	         tuning field swaps (a new WorkerFactory), sticky cache included.
 //	restart  CacheSize (Go only): the Go SDK's sticky cache is process-wide
 //	         and sized once, so the Worker process exits and is restarted.
 //	         Python caches per Worker, so it swaps instead.
@@ -41,6 +42,12 @@ type LaneConfig struct {
 	DurationMs    int    `json:"durationMs"`
 	JitterPct     int    `json:"jitterPct"`
 	IOConcurrency int    `json:"ioConcurrency"` // downstream service limit, "io" profile
+
+	// Java lane only: the Worker-tuning feature flag (javaworker/.../TuningFlag.java).
+	// Go and Python ignore these. TuningMode is "manual" | "resource" | "sdk-defaults".
+	TuningMode      string `json:"tuningMode"`
+	WorkflowThreads int    `json:"workflowThreads"` // WorkerFactoryOptions.maxWorkflowThreadCount
+	TargetCPUPct    int    `json:"targetCpuPct"`    // ResourceBasedTuner target, "resource" mode
 }
 
 // LaneConfigVersioned is what a Worker receives when it polls for config.

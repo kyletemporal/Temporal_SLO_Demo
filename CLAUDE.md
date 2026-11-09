@@ -62,6 +62,8 @@ for d in terraform/examples/*/ terraform/patterns/*/; do (cd $d && terraform val
 python3 tools/generate_visibility_rules.py --check   # drift check
 tests/promql/run.sh                 # promtool unit tests: alerts fire in the no-series cases
 cd demo/lab && go test ./...        # lab diagnosis pinned to measured cases
+docker build demo/lab/javaworker     # Java tuning flag: TuningFlagTest runs in the build
+python3 tools/generate_worker_tuning_dashboard.py   # Workers — Tuning board (generated)
 cd aws/eks-selfhosted/terraform && terraform test    # mocked-provider plan checks
 ```
 
@@ -183,6 +185,32 @@ and never fires, or a number that looks like data and is not.
   `docker info --format '{{.NCPU}}'` (that's what `make lab-fast-db` does).
 - **`histogram_quantile` returns NaN with no traffic, and `encoding/json` refuses
   NaN.** One NaN breaks a whole JSON response. Drop NaN/Inf at the source.
+
+**Java SDK 1.2x and the tuning flag** (`demo/lab/javaworker`, measured on 1.28.4)
+
+- **No poller autoscaler and no `num_pollers` before 1.30.0**, and
+  `DescribeTaskQueue` counts poller *identities*: 2 configured pollers read `1`.
+  Export the configured value (`worker_tuning_setting`); nothing else counts it.
+- **The Workflow thread pool caps the sticky cache at `maxWorkflowThreads − 1`.**
+  Cache 1000, 20 threads: it held 19, and 58% of tasks replayed. Diagnose on
+  `temporal_sticky_cache_size`, not the forced-eviction counter (0.4/s against
+  10 misses/s). `sticky_cache_total_forced_eviction` counts ordinary completions.
+- **Micrometer timer histograms stop at 30 s.** Beyond that, `histogram_quantile`
+  reads 30 s. Raise `maximumExpectedValue` with a `MeterFilter`.
+- **A swapped-in tuner leaves slot gauges frozen.** With `ResourceBasedTuner`, 1.28.4
+  stops reporting ActivityWorker `slots_available`, and a Micrometer gauge
+  keeps its last value: 10 free shown, 1 granted, 300 queued. Use
+  `GenerationalGaugeReporter` with any in-process Worker swap.
+- **`ResourceBasedTuner` caps CPU, not latency** (1–2 of 50 slots, schedule-to-start
+  23 s and climbing), measures *system* CPU, and has no `temporal_` metric
+  prefix before 1.32. On 1.29.0–1.32.x it can hang for good (#2779); the
+  flag refuses it there.
+- **Pin `micrometer-registry-prometheus` to the SDK's Micrometer BOM** (1.9.9 for
+  1.24–1.29). A newer registry fails at startup with `NoSuchMethodError`.
+- **API keys before Java 1.28.1 need `temporal-namespace` set by hand.** So do
+  raw gRPC clients like k6. Without it a valid key gets `PERMISSION_DENIED`.
+- **k6 init code runs once per VU.** A run id made there gave 4 VUs 4 ids, and
+  the teardown counted 0 of 88 still running. Make per-run values in `setup()`.
 
 ## Design commitments
 

@@ -173,13 +173,21 @@ def _q(expr):
 # and failing on that turns "nobody has sent traffic yet" into a red validator
 # run that looks like a broken deployment. Gate on real traffic and downgrade
 # empties to warnings when there is none.
-# Presence, NOT rate(). A counter that has just come into existence has no
-# earlier sample to subtract from, so rate() over it returns 0 — which would
-# make this gate report "no traffic" immediately after the first Workflow ran.
-_r = _q('sum(temporal_activity_schedule_to_start_latency_seconds_count)')
+# RECENT traffic, in the demo app's namespace. Two ways to get this wrong:
+#  - Lifetime presence. The first version summed the bare counter, which stays
+#    > 0 for as long as any Worker that ever ran a task is up. With the Temporal
+#    server stopped for 23 h, the lab's 1470 lifetime tasks kept this gate
+#    "true" and 29 idle panels FAILED as broken (verified 2026-11-05).
+#  - Unscoped. Lab traffic (namespace="lab") satisfied the gate, so running only
+#    the lab failed the default-namespace SLI panels.
+# rate()/increase() alone is not enough either: a counter that has just come
+# into existence has no earlier sample to subtract from and reads 0 right after
+# the first Workflow ran. A series that did not exist 10m ago is new traffic.
+_TS = 'temporal_activity_schedule_to_start_latency_seconds_count{namespace="default"}'
+_r = _q(f'(sum(increase({_TS}[10m])) > 0) or count({_TS} unless {_TS} offset 10m)')
 HAS_TRAFFIC = bool(_r) and float(_r[0]["value"][1]) > 0
 if not HAS_TRAFFIC:
-    print("\n  \033[33mNOTE\033[0m  no Activity traffic in the last 10m — panels that need")
+    print("\n  \033[33mNOTE\033[0m  no demo-app Activity traffic (namespace default) in the last 10m — panels that need")
     print("        traffic will WARN rather than FAIL. Run 'make smoke' or")
     print("        'make baseline', wait ~30s, and re-run for a full check.")
 
@@ -196,6 +204,19 @@ if not HAS_AGENT:
     print("  \033[33mNOTE\033[0m  no agent has ever run — gen_ai_* panels will WARN rather")
     print("        than FAIL. Run 'make agent-demo' (offline mock, no API key)")
     print("        and re-run for a full check.")
+
+# The Worker Tuning board, on three more independent axes. The lab is opt-in
+# (`make lab`), k6 runs only on demand, and the ResourceBasedTuner panel only
+# has series while a Worker is in RESOURCE_BASED mode. Gated on the QUERY, not
+# the panel title, so a lab that IS running still fails loudly on a dead panel.
+def _has(expr):
+    r = _q(expr)
+    return bool(r) and float(r[0]["value"][1]) > 0
+HAS_LAB = _has("count(worker_tuning_mode)")
+HAS_K6 = _has("count(k6_vus)")
+HAS_TUNER = _has('sum(worker_tuning_mode{mode="RESOURCE_BASED"})')
+LAB_ONLY = ("worker_tuning_", "temporal_workflow_active_thread_count", "jvm_", "process_cpu_usage",
+            "temporal_sticky_cache_thread_forced_eviction")
 
 # Matched CASE-INSENSITIVELY: the same concept is titled differently on
 # different dashboards ("Workflow Outcomes" vs "Workflow outcomes"), and an
@@ -215,6 +236,9 @@ EXPECTED_EMPTY = {k.lower(): v for k, v in {
     "Completions by outcome":
         "failed/timeout/terminated counters are not created until they first increment",
     "Errors by type — server fault only":
+        "no server faults have occurred — empty here is the healthy state",
+    # Same query as above, titled differently on temporal-overview.json.
+    "Errors — server fault only":
         "no server faults have occurred — empty here is the healthy state",
     "Activity failures and retries":
         "temporal_activity_execution_failed_total does not exist until an Activity fails",
@@ -339,6 +363,14 @@ for path in sorted(glob.glob("grafana/dashboards/*/*.json")):
                 print(f"    \033[32m PASS\033[0m  {title[:58]}")
             elif st == "EMPTY" and title.lower() in EXPECTED_EMPTY:
                 print(f"    \033[33m ----\033[0m  {title[:58]}  (empty by design: {EXPECTED_EMPTY[title.lower()]})")
+            elif st == "EMPTY" and "k6_" in e and not HAS_K6:
+                print(f"    \033[33m WARN\033[0m  {title[:58]}  no data (k6 not running: make k6-tuning)")
+            elif st == "EMPTY" and "k6_temporal_starts_failed" in e:
+                print(f"    \033[33m ----\033[0m  {title[:58]}  (empty by design: k6 creates the counter on the first failed start)")
+            elif st == "EMPTY" and "resource_slots_" in e and not HAS_TUNER:
+                print(f"    \033[33m ----\033[0m  {title[:58]}  (empty by design: no Worker in RESOURCE_BASED mode)")
+            elif st == "EMPTY" and any(m in e for m in LAB_ONLY) and not HAS_LAB:
+                print(f"    \033[33m WARN\033[0m  {title[:58]}  no data (Java lab Worker not running: make lab)")
             elif st == "EMPTY" and "gen_ai_" in e and not HAS_AGENT:
                 print(f"    \033[33m WARN\033[0m  {title[:58]}  no data (no agent has run)")
             elif st == "EMPTY" and "container_cpu_usage_seconds_total" in e:

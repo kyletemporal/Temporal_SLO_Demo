@@ -1,0 +1,10 @@
+{
+  "mode": "MANUAL",
+  "workflowTaskPollers": 4,
+  "activityTaskPollers": 4,
+  "workflowTaskSlots": 100,
+  "activitySlots": 100,
+  "stickyCacheSize": 600,
+  "maxWorkflowThreads": 600,
+  "label": "CHG-0000 baseline"
+}

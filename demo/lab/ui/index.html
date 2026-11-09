@@ -76,7 +76,7 @@
   <span class="sub">Real Workers on a real Temporal Service. Every number below is measured — SDK metrics from the Workers, queue depth from the server.</span>
   <div class="right">
     <label class="sub">Show
-      <select id="show"><option value="both">both lanes</option><option value="go">Go</option><option value="python">Python</option></select>
+      <select id="show"><option value="both">all lanes</option><option value="go">Go</option><option value="python">Python</option><option value="java">Java</option></select>
     </label>
     <span id="conn" class="pill">connecting…</span>
   </div>
@@ -86,7 +86,7 @@
   Bottleneck presets are named after the ones in
   <a href="https://github.com/cvilenio/temporal-worker-tuning-simulator" target="_blank" rel="noopener">temporal-worker-tuning-simulator</a>:
   predict the outcome there, then watch the real SDK and server do it here. Diagnosis lines are heuristics over real measurements.
-  Grafana shows the same Go Workers under <code>task_queue="lab-go"</code>.
+  Grafana shows the Go and Java Workers under <code>task_queue="lab_go"</code> and <code>task_queue="lab-java"</code> (the Go SDK rewrites the dash; Micrometer does not), on the <b>Worker Tuning</b> board.
 </footer>
 
 <template id="lane-tpl">
@@ -114,7 +114,8 @@
 
 <script>
 "use strict";
-const LANES = ["go", "python"];
+const LANES = ["go", "python", "java"];
+const TITLES = { go: "Go Worker", python: "Python Worker", java: "Java Worker · tuning flag" };
 const HIST = 300; // seconds of chart history
 const state = { snap: null, series: {}, presets: [], views: {} };
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -137,6 +138,9 @@ const CONTROLS = [
     ["actSlots", "Activity slots", 1, 200, 1, "swap"],
     ["cacheSize", "Sticky cache size", 1, 2000, 1, "cache"],
     ["cpus", "CPUs (GOMAXPROCS)", 1, 8, 1, "cpu"],
+    // Java lane only (see JAVA_ONLY): the tuning flag's factory and tuner knobs.
+    ["workflowThreads", "Workflow threads (Java)", 0, 2000, 10, "swap"],
+    ["targetCpuPct", "Resource tuner target CPU % (Java)", 10, 100, 5, "swap"],
   ]],
   ["Activity profile", [
     ["durationMs", "Base duration (ms)", 10, 3000, 10, "live"],
@@ -149,13 +153,18 @@ const MODE_TEXT = {
   next: ["next", "applies to Workflows started after the change"],
   swap: ["swap", "Worker is replaced in place; the new one polls before the old one drains"],
 };
+const JAVA_ONLY = new Set(["workflowThreads", "targetCpuPct"]);
 function modeFor(kind, lane) {
   if (kind === "cache") return lane === "go"
     ? ["restart", "Go's sticky cache is process-wide: the Worker process restarts"]
-    : ["swap", "Python caches per Worker: swapped in place"];
+    : lane === "java"
+      ? ["swap", "Java caches per WorkerFactory: the swap builds a new factory, so the cache starts cold"]
+      : ["swap", "Python caches per Worker: swapped in place"];
   if (kind === "cpu") return lane === "go"
     ? ["live", "GOMAXPROCS changes immediately"]
-    : ["n/a", "Python: CPU-bound Activities share one GIL"];
+    : lane === "java"
+      ? ["n/a", "The JVM sizes itself from the container at start (LAB_JAVA_CPUS)"]
+      : ["n/a", "Python: CPU-bound Activities share one GIL"];
   return MODE_TEXT[kind];
 }
 
@@ -165,13 +174,14 @@ function modeFor(kind, lane) {
 function buildLane(lane) {
   const el = $("#lane-tpl").content.firstElementChild.cloneNode(true);
   el.dataset.lane = lane;
-  $(".title", el).textContent = lane === "go" ? "Go Worker" : "Python Worker";
+  $(".title", el).textContent = TITLES[lane];
   const v = { el, lane, inputs: {}, charts: {}, particles: [], acc: {}, cfg: null, dirty: 0 };
 
   // Presets
   const sel = $(".preset", el);
   sel.innerHTML = `<option value="">Preset…</option>` +
-    state.presets.map(p => `<option value="${p.name}">${p.title}</option>`).join("");
+    state.presets.filter(p => !p.lanes || p.lanes.includes(lane))
+      .map(p => `<option value="${p.name}">${p.title}</option>`).join("");
   sel.onchange = async () => {
     if (!sel.value) return;
     await fetch(`/api/preset?lane=${lane}&name=${sel.value}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
@@ -201,7 +211,21 @@ function buildLane(lane) {
       s.onchange = () => push(v, { ...v.cfg, profile: s.value });
       v.inputs.profile = s;
     }
+    if (title === "Worker options" && lane === "java") {
+      // The feature flag itself. Every value below it is one field of the flag.
+      const row = document.createElement("div");
+      row.className = "ctl";
+      row.innerHTML = `<label>Tuning flag mode <span class="mode swap" title="a new WorkerFactory is built and started before the old one drains">swap</span></label>
+        <select data-k="tuningMode"><option value="manual">MANUAL — fixed pollers + slots</option>
+        <option value="resource">RESOURCE_BASED — tuner sizes slots, pollers fixed</option>
+        <option value="sdk-defaults">SDK_DEFAULTS — flag off (5/5 pollers, 200/200 slots)</option></select>`;
+      fs.appendChild(row);
+      const s = $("select", row);
+      s.onchange = () => push(v, { ...v.cfg, tuningMode: s.value });
+      v.inputs.tuningMode = s;
+    }
     for (const [k, label, min, max, step, kind] of ctls) {
+      if (JAVA_ONLY.has(k) && lane !== "java") continue;
       const [m, tip] = modeFor(kind, lane);
       const row = document.createElement("div");
       row.className = "ctl";
@@ -318,9 +342,12 @@ function drawPollers(gEl, configured, active, y, color) {
   const n = Math.min(configured, 12);
   for (let i = 0; i < n; i++) {
     const cx = X.poll + (i % 4) * 18, cy = y - 12 + Math.floor(i / 4) * 18;
-    s("circle", { cx, cy, r: 6, fill: i < active ? color : "none", stroke: color, "stroke-width": 1.5 }, gEl);
+    const a = { cx, cy, r: 6, fill: i < active ? color : "none", stroke: color, "stroke-width": 1.5 };
+    if (active < 0) a["stroke-dasharray"] = "2 2";
+    s("circle", a, gEl);
   }
-  if (configured > 12) s("text", { x: X.poll, y: y + 46, "font-size": 10, class: "muted" }, gEl, `${configured} total`);
+  if (active < 0) s("text", { x: X.poll, y: y + 46, "font-size": 10, class: "muted" }, gEl, `${configured} configured · not measured <1.30`);
+  else if (configured > 12) s("text", { x: X.poll, y: y + 46, "font-size": 10, class: "muted" }, gEl, `${configured} total`);
 }
 
 function drawSlots(gEl, total, used, y, color) {
@@ -394,6 +421,7 @@ function render(snap) {
     const st = $(".status", v.el);
     if (!l.workers.length) { st.textContent = "no worker"; st.className = "pill status warn"; }
     else if (!live.length) { st.textContent = "restarting…"; st.className = "pill status warn"; }
+    else if (live.some(w => /FLAG REJECTED/.test(w.note || ""))) { st.textContent = `flag v${l.version} REJECTED · still running v${live[0].configVersion}`; st.className = "pill status warn"; }
     else if (live.some(w => !w.applied)) { st.textContent = `applying v${l.version}…`; st.className = "pill status warn"; }
     else { st.textContent = `${live[0].sdk} · lab-${lane} · v${l.version}`; st.className = "pill status ok"; }
     const tg = $(".toggle", v.el);
@@ -404,7 +432,7 @@ function render(snap) {
     if (Date.now() - v.dirty > 1500) {
       for (const k in v.inputs) {
         const inp = v.inputs[k];
-        if (k === "profile") { inp.value = c.profile; continue; }
+        if (k === "profile" || k === "tuningMode") { inp.value = c[k]; continue; }
         inp.input.value = c[k]; inp.val.textContent = c[k];
       }
     }
@@ -423,8 +451,11 @@ function render(snap) {
       v.t[row + "Rates"].textContent = q.err ? "server metrics unavailable" :
         `server: ${q.backlog} queued · ${fmt(q.dispatchRate)}/s · sync ${q.syncMatch < 0 ? "–" : fmt(q.syncMatch * 100, 0) + "%"} · ${q.pollers < 0 ? "?" : q.pollers}p`;
     }
-    drawPollers(v.t.wfPollers, c.wfPollers, Math.round(d.PollersWF + d.PollersSticky), ROWS.wf, "var(--wf)");
-    drawPollers(v.t.actPollers, c.actPollers, Math.round(d.PollersAct), ROWS.act, "var(--act)");
+    // Java <1.30 emits no num_pollers, so nothing measures how many polls are
+    // open: draw the configured count dashed rather than as "0 active".
+    const pm = d.PollerGauges || lane !== "java";
+    drawPollers(v.t.wfPollers, c.wfPollers, pm ? Math.round(d.PollersWF + d.PollersSticky) : -1, ROWS.wf, "var(--wf)");
+    drawPollers(v.t.actPollers, c.actPollers, pm ? Math.round(d.PollersAct) : -1, ROWS.act, "var(--act)");
     const pw = drawSlots(v.t.wfSlots, d.WftSlotsTotal || c.wfSlots, d.WftSlotsUsed, ROWS.wf, "var(--wf)");
     const pa = drawSlots(v.t.actSlots, d.ActSlotsTotal || c.actSlots, d.ActSlotsUsed, ROWS.act, "var(--act)");
     v.t.wfSlotTxt.textContent = `${fmt(d.WftSlotsUsed, 0)} / ${fmt(d.WftSlotsTotal, 0)} busy${pw > 1 ? ` · 1 cell = ${fmt(pw, 1)}` : ""} · exec p95 ${ms(d.WftExecP95)}`;

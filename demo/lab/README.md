@@ -46,8 +46,9 @@ None of that project's code is used here; it has no license.
 The difference is that **nothing here is modelled**. There are no simulated
 tasks or modelled queues, and no CPU model:
 - Workflows run on the demo's real Temporal OSS server.
-- Each lane is a real Worker: Go SDK 1.47.0 and Python SDK 1.34.0, on Task
-  Queues `lab-go` and `lab-python`.
+- Each lane is a real Worker: Go SDK 1.47.0, Python SDK 1.34.0 and Java SDK
+  1.28.4, on Task Queues `lab-go`, `lab-python` and `lab-java`. The Java lane is
+  tuned through a feature flag; see [Java lane](#java-lane-tuning-behind-a-feature-flag).
 - Every slot, poller, latency and cache figure is the SDK's own metric,
   captured as it's emitted.
 - CPU is the Worker process's measured CPU time.
@@ -160,13 +161,61 @@ after 60 s of each preset from an empty queue.
    `DescribeTaskQueue` with `ReportStats` read 0 throughout on this 1.27
    server. The lab shows both numbers.
 
+## Java lane: tuning behind a feature flag
+
+The `java` lane runs Java SDK **1.28.4**, the kind of 1.2x version a regulated
+customer is likely to be on, tuned by a **feature flag** rather than by Worker
+options in code. In the lab, the controller is the flag service. The same
+Worker also reads the flag from a JSON file (a ConfigMap) when run standalone.
+The full guide, including the copyable classes and the customer landmine list,
+is in [`javaworker/README.md`](javaworker/README.md).
+
+- **Tuning flag mode** picks `MANUAL`, `RESOURCE_BASED` or `SDK_DEFAULTS`. Every
+  tuning control on this lane is a *swap*: Java cannot change a running
+  Worker's options, so a new `WorkerFactory` starts before the old one drains.
+- On 1.2x **there is no poller autoscaler** (it arrived in 1.30.0) **and no
+  `num_pollers` metric**. The poller dots are drawn dashed and labelled
+  "configured · not measured".
+- A flag the Worker rejects keeps the old config running. The lane shows
+  `flag vN REJECTED · still running vM`, with the reason in the Worker line.
+
+Measured, one Java Worker, from an empty queue:
+
+| Preset | Measured | Diagnosis |
+|---|---|---|
+| Baseline (Java) | 4.3 Workflows/s; schedule-to-start p95 6–7 ms; sync match 93–100% | Keeping up |
+| Java: Workflow threads starved | Cache 1000, 20 Workflow threads, ~40 Workflows open: cache **held 19**, 58% of Workflow Tasks missed and replayed, forced thread evictions only 0.4/s; Activity slots 40/50, CPU 0.02 | Thread-capped cache |
+| …then flag `workflowThreads` → 1000 | Cache 40 (every open Workflow), hit 100% within ~6 s; worst WFT schedule-to-start across the swap 101 ms | Keeping up |
+| Java: resource-based tuner | Target 60%: system CPU 0.586, **1–2 of 50** Activity slots granted, schedule-to-start 8.7 → 15.6 → 23.6 s and climbing | Tuner caps resources, not latency |
+| Flag `workflowThreads` → 0 | Rejected: 0 means "SDK default" to `WorkerOptions`. The Worker kept v9 running | `FLAG REJECTED` |
+
+Three things only the Java lane showed:
+
+1. **The thread pool caps the cache, quietly.** The tell is `temporal_sticky_cache_size`
+   stuck at `maxWorkflowThreads − 1`, not the forced-eviction counter, which
+   understated the miss rate 25×. The diagnosis keys on the gauge, and then
+   suppresses "raise the cache size", which is the wrong advice here.
+2. **Slot gauges froze across a swap.** Switching to the tuner, the SDK stopped
+   reporting ActivityWorker `slots_available`, and Micrometer held the old **10**
+   while 1 slot was granted and 300 tasks queued. The lane now exports gauges
+   through `GenerationalGaugeReporter`, and the series goes absent instead.
+3. **Micrometer clamps latency at 30 s** unless the histogram ceiling is raised
+   (verified with a 120 s sample). The lane raises it to 10 min.
+
+Drive the Java lane from outside with the customer k6 test:
+`make k6-tuning` (see [`../k6/worker-tuning`](../k6/worker-tuning/README.md)).
+The **Workers — Tuning** Grafana board (`tools/generate_worker_tuning_dashboard.py`)
+puts the flag, the Worker metrics and k6's steps on one time axis.
+
 ## Limits
 
 - **One Worker per lane in the UI.** Scale with
   `docker compose --profile lab up -d --scale lab-worker-go=3`; the controller
   sums the Workers.
 - **CPU ceilings:** the Go Worker container is capped at 4 CPUs
-  (`LAB_GO_CPUS`) and the Python one at 2 (`LAB_PY_CPUS`), so the CPU presets
+  (`LAB_GO_CPUS`), the Python one at 2 (`LAB_PY_CPUS`) and the Java one at 2
+  CPUs and 1 GB (`LAB_JAVA_CPUS`; the JVM sizes itself at start, so the CPU
+  control is n/a on Java), so the CPU presets
   can't starve the rest of the stack. The Go Worker reports the smaller of
   `GOMAXPROCS` and that quota as its CPU limit. With `GOMAXPROCS=8` in a 4-CPU
   container, the limit used to read 8, so a saturated Worker read as half-idle
