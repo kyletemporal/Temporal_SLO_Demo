@@ -41,7 +41,9 @@ func main() {
 		set.File = append(set.File, protodesc.ToFileDescriptorProto(fd))
 	}
 	add(ws.File_temporal_api_workflowservice_v1_service_proto)
-	b, err := proto.Marshal(set)
+	// Deterministic so CI can rebuild this file and byte-compare it with the
+	// committed copy: that check is what makes a committed binary reviewable.
+	b, err := proto.MarshalOptions{Deterministic: true}.Marshal(set)
 	if err != nil {
 		log.Fatal(err)
 	}
