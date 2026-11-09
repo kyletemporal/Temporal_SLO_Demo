@@ -103,6 +103,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/k6protoset/go.mod
+          cache-dependency-path: tools/k6protoset/go.sum
+      - name: rebuild the k6 protoset
+        # The one committed binary (allowed by name in the hygiene job). It is
+        # reviewable only because it is rebuilt here and byte-compared below by
+        # the same `git diff`: a hand-swapped or stale protoset fails CI.
+        run: cd tools/k6protoset && go run . ../../demo/k6/worker-tuning/temporal-api.protoset
       - name: regenerate and diff
         # The repo rule is "edit the generator, not the JSON" (CONTRIBUTING.md).
         # Nothing enforced it, and hand-edits to generated dashboards are
@@ -270,7 +279,14 @@ jobs:
         if: success() || failure()
         run: |
           fail=0
+          # Allowed by exact path, each one rebuilt from source and
+          # byte-compared in the generators job, so nothing opaque gets in:
+          #   temporal-api.protoset: k6 can only load the Temporal API as
+          #   compiled descriptors, and the customer folder must run with no
+          #   toolchain. Built by tools/k6protoset.
+          allowed="demo/k6/worker-tuning/temporal-api.protoset"
           while IFS= read -r f; do
+            case " $allowed " in *" $f "*) continue ;; esac
             if file --mime "$f" | grep -q 'charset=binary'; then
               echo "committed binary: $f ($(du -h "$f" | cut -f1))"; fail=1
             fi

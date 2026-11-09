@@ -226,7 +226,7 @@ services:
   # A live UI at http://localhost:8095 that changes real Worker options at
   # runtime (pollers, slots, sticky cache, CPUs, Activity profile) and shows
   # what the SDK and server actually do. Its own Task Queues (lab-go,
-  # lab-python), so it never shares slots with the order or agent Workers.
+  # lab-python, lab-java), so it never shares slots with the order or agent Workers.
   # Starts idle: no load until someone presses Start in the UI.
   # ---------------------------------------------------------------------------
   lab-controller:
@@ -280,6 +280,32 @@ services:
       TEMPORAL_ADDRESS: temporal:7233
       TEMPORAL_NAMESPACE: lab
     cpus: "${LAB_PY_CPUS:-2}"
+    networks: [tobs]
+
+  # Java SDK 1.2x Worker driven by a tuning FEATURE FLAG (lab/javaworker). In
+  # the lab the controller is the flag service; FLAG_SOURCE=file reads a JSON
+  # flag instead (see lab/javaworker/README.md). Pinned to 1.28.4 on purpose —
+  # see the comment in lab/javaworker/pom.xml before changing it.
+  lab-worker-java:
+    build:
+      context: ./lab/javaworker
+      args:
+        TEMPORAL_SDK_VERSION: "${LAB_JAVA_SDK:-1.28.4}"
+    profiles: [lab]
+    restart: unless-stopped
+    depends_on: [lab-controller]
+    environment:
+      LANE: java
+      CONTROLLER_URL: http://lab-controller:8095
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_NAMESPACE: lab
+      METRICS_PORT: "9464"
+      FLAG_SOURCE: controller
+    # The memory limit matters to the RESOURCE_BASED mode: the tuner sees heap
+    # (-Xmx384m, set in the image) and nothing else, so the container is sized
+    # with room for thread stacks and two Worker generations during a swap.
+    cpus: "${LAB_JAVA_CPUS:-2}"
+    mem_limit: 1g
     networks: [tobs]
 
   # ---------------------------------------------------------------------------

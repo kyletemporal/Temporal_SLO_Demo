@@ -53,6 +53,20 @@ func TestDiagnoseMeasuredCases(t *testing.T) {
 		{"cpu-constrained (python, GIL)", lane("python 1.34.0", on, Derived{
 			WftSlotsUsed: 10, WftSlotsTotal: 10, WftS2sP95: 10, WftQueueEst: 69,
 			ActSlotsUsed: 6, ActSlotsTotal: 20, CPUCores: 1.02, CPULimit: 1, CacheHitRatio: 1}), "GIL-bound"},
+		// Measured: cache 1000, 20 Workflow threads, ~40 open. The cache held
+		// 19, 58% of tasks missed, forced thread evictions only 0.4/s.
+		{"java-thread-starved", lane("java 1.28.4", func() LaneConfig { c := on; c.CacheSize = 1000; c.WorkflowThreads = 20; return c }(), Derived{
+			ActSlotsUsed: 40, ActSlotsTotal: 50, ActS2sP95: 0.004, WftS2sP95: 0.011,
+			CacheSize: 19, CacheHitRatio: 0.42, ThreadEvictPerSec: 0.36, CPUCores: 0.02, CPULimit: 2}), "Workflow threads cap the sticky cache"},
+		// The same hit ratio on Go is plain cache thrash: no thread pool there.
+		{"cache thrash is not thread-capped on go", lane("go 1.47.0", func() LaneConfig { c := on; c.CacheSize = 2; c.WorkflowThreads = 1000; return c }(), Derived{
+			CacheSize: 1, CacheHitRatio: 0.0, ActS2sP95: 0.01, CPUCores: 0.05, CPULimit: 2}), "Sticky cache hit ratio"},
+		// Measured: target 60%, system CPU 0.586, 1-2 of 50 Activity slots
+		// granted, schedule-to-start 23.6s and climbing. Process CPU 1.2 of 2
+		// is below the CPU-bound threshold, and slots are NOT "all busy".
+		{"java-resource-based", lane("java 1.28.4", func() LaneConfig { c := on; c.TuningMode = "resource"; c.TargetCPUPct = 60; c.ActSlots = 50; return c }(), Derived{
+			ActSlotsUsed: 1, ActSlotsTotal: 50, ActS2sP95: 23.6, ActQueueEst: 312, TunerManaged: true, TunerCPU: 0.586,
+			CPUCores: 1.22, CPULimit: 2, CacheHitRatio: 1}), "Resource-based tuner is holding Activity slots"},
 		{"baseline", lane("go 1.47.0", on, Derived{
 			ActSlotsUsed: 4, ActSlotsTotal: 10, ActS2sP95: 0.008, CPUCores: 0.05, CPULimit: 2, CacheHitRatio: 1}), "Keeping up"},
 	}

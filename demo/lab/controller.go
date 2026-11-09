@@ -11,6 +11,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,7 +29,7 @@ import (
 //go:embed ui
 var uiFS embed.FS
 
-var lanes = []string{"go", "python"}
+var lanes = []string{"go", "python", "java"}
 
 // -----------------------------------------------------------------------------
 // Presets. Named after the bottlenecks in cvilenio/temporal-worker-tuning-simulator
@@ -37,12 +38,14 @@ var lanes = []string{"go", "python"}
 // -----------------------------------------------------------------------------
 
 type Preset struct {
-	Name     string     `json:"name"`
-	Title    string     `json:"title"`
-	Expect   string     `json:"expect"`
-	Config   LaneConfig `json:"config"`
-	GoOnly   bool       `json:"goOnly,omitempty"`
-	Disabled bool       `json:"-"`
+	Name   string     `json:"name"`
+	Title  string     `json:"title"`
+	Expect string     `json:"expect"`
+	Config LaneConfig `json:"config"`
+	GoOnly bool       `json:"goOnly,omitempty"`
+	// Lanes restricts a preset to these lanes in the UI; empty means every lane.
+	Lanes    []string `json:"lanes,omitempty"`
+	Disabled bool     `json:"-"`
 }
 
 var baseline = LaneConfig{
@@ -50,6 +53,16 @@ var baseline = LaneConfig{
 	WFPollers: 2, WFSlots: 10, ActPollers: 2, ActSlots: 10,
 	CacheSize: 1000, CPUs: 2,
 	Profile: "sleep", DurationMs: 150, JitterPct: 20, IOConcurrency: 8,
+	// Threads >= cache size: a Java cache larger than its Workflow thread pool
+	// can never fill (each cached Workflow parks a thread), and the baseline
+	// should not open with that warning.
+	TuningMode: "manual", WorkflowThreads: 1000, TargetCPUPct: 80,
+}
+
+func javaPreset(name, title, expect string, mut func(*LaneConfig)) Preset {
+	p := preset(name, title, expect, mut)
+	p.Lanes = []string{"java"}
+	return p
 }
 
 func preset(name, title, expect string, mut func(*LaneConfig)) Preset {
@@ -116,6 +129,40 @@ var presets = []Preset{
 			c.Rate = 8
 			c.Phases = 2
 		}),
+
+	// Java-only: the tuning flag's three modes and the Java-specific trap.
+	javaPreset("java-sdk-defaults", "Java: SDK defaults (flag off)",
+		"The control group: 5 + 5 pollers, 200 + 200 slots, cache 600, 600 Workflow threads. "+
+			"Flip back to manual and compare; the swap itself costs one replay per open Workflow.",
+		func(c *LaneConfig) { c.TuningMode = "sdk-defaults" }),
+	javaPreset("java-thread-starved", "Java: Workflow threads starved",
+		"Sticky cache 1000 but only 20 Workflow threads, with ~40 Workflows open. Each cached Workflow parks a thread, "+
+			"so the SDK force-evicts to free threads: the cache hit ratio falls although the cache is nowhere near full, slots are free and CPU is idle.",
+		func(c *LaneConfig) {
+			c.CacheSize = 1000
+			c.WorkflowThreads = 20
+			// Enough Activity slots (demand is ~8 concurrent) that the thread
+			// pool is the ONLY constraint. The first version had 10 and was
+			// slot-bound as well, which buried the finding.
+			c.ActSlots = 50
+			c.Rate = 4
+			c.Phases = 5
+			c.ActivitiesPerPhase = 1
+			c.DurationMs = 2000
+			c.JitterPct = 0
+		}),
+	javaPreset("java-resource-based", "Java: resource-based tuner",
+		"ResourceBasedTuner sizes slots from CPU and heap (target 60% CPU) under CPU-bound load. "+
+			"Pollers stay fixed: the tuner never touches them. Watch busy slots track CPU instead of the configured maximum.",
+		func(c *LaneConfig) {
+			c.TuningMode = "resource"
+			c.TargetCPUPct = 60
+			c.Profile = "cpu"
+			c.DurationMs = 100
+			c.ActSlots = 50
+			c.Rate = 6
+			c.Phases = 2
+		}),
 }
 
 // -----------------------------------------------------------------------------
@@ -167,6 +214,18 @@ type Derived struct {
 
 	// Long-poll RPC latency, p50 over the window. See pollKey in telemetry.go.
 	PollWftP50, PollActP50 float64
+
+	// Java: Workflow threads in use, and cached Workflows evicted to free a
+	// thread. Zero on Go and Python, which have no such pool.
+	WfThreads, ThreadEvictPerSec float64
+	// False when no Worker reports num_pollers (Java <1.30): the UI then draws
+	// the configured count, labelled, instead of a measured one.
+	PollerGauges bool
+	// Java RESOURCE_BASED: the tuner's own CPU and heap readings (0-1, max
+	// across Workers), and whether a tuner rather than a fixed count sizes
+	// the slots. With a tuner, 1.28.4 reports no Activity slots_available.
+	TunerCPU, TunerMem float64
+	TunerManaged       bool
 }
 
 // ServerHealth is the Temporal server's own view of how hard it is working,
@@ -423,6 +482,17 @@ func validate(c *LaneConfig) error {
 	clamp(&c.DurationMs, 1, 60000)
 	clamp(&c.JitterPct, 0, 100)
 	clamp(&c.IOConcurrency, 1, 1000)
+	switch c.TuningMode {
+	case "manual", "resource", "sdk-defaults":
+	case "":
+		c.TuningMode = "manual"
+	default:
+		return fmt.Errorf("tuningMode must be manual, resource or sdk-defaults")
+	}
+	// 0 is passed through on purpose for the Java lane: the flag REJECTS it
+	// (0 means "SDK default" to WorkerOptions), and the UI shows the rejection.
+	c.WorkflowThreads = max(0, min(5000, c.WorkflowThreads))
+	clamp(&c.TargetCPUPct, 10, 100)
 	return nil
 }
 
@@ -440,8 +510,13 @@ func (c *controller) handlePreset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := r.URL.Query().Get("name")
+	l := r.URL.Query().Get("lane")
 	for _, p := range presets {
 		if p.Name == name {
+			if len(p.Lanes) > 0 && !slices.Contains(p.Lanes, l) {
+				http.Error(w, "preset "+name+" does not apply to lane "+l, http.StatusBadRequest)
+				return
+			}
 			cfg := p.Config
 			c.setConfig(ls, cfg)
 			writeJSON(w, cfg)
@@ -798,12 +873,26 @@ func (c *controller) laneSnapshot(l string, ls *laneState) *LaneSnapshot {
 		misses += rate(h, "cache_miss")
 		g := rep.Gauges
 		d.WftSlotsUsed += g["wft_slots_used"]
-		d.WftSlotsTotal += g["wft_slots_used"] + g["wft_slots_available"]
 		d.ActSlotsUsed += g["act_slots_used"]
-		d.ActSlotsTotal += g["act_slots_used"] + g["act_slots_available"]
+		if tc, ok := g["tuner_cpu"]; ok {
+			// No slots_available under a tuner: "used of used" would read as
+			// every slot busy. Show used against the tuner's MAXIMUM instead.
+			d.TunerManaged = true
+			d.TunerCPU, d.TunerMem = max(d.TunerCPU, tc), max(d.TunerMem, g["tuner_mem"])
+			d.WftSlotsTotal += float64(s.Config.WFSlots)
+			d.ActSlotsTotal += float64(s.Config.ActSlots)
+		} else {
+			d.WftSlotsTotal += g["wft_slots_used"] + g["wft_slots_available"]
+			d.ActSlotsTotal += g["act_slots_used"] + g["act_slots_available"]
+		}
 		d.PollersWF += g["pollers_workflow"]
 		d.PollersSticky += g["pollers_sticky"]
 		d.PollersAct += g["pollers_activity"]
+		if _, ok := g["pollers_activity"]; ok {
+			d.PollerGauges = true
+		}
+		d.WfThreads += g["wf_threads"]
+		d.ThreadEvictPerSec += rate(h, "cache_thread_evict")
 		d.CacheSize += g["cache_size"]
 		d.CPUCores += rep.CPUCores
 		d.CPULimit += rep.CPULimit
@@ -863,7 +952,15 @@ func diagnose(s *LaneSnapshot) []string {
 	// poller-bound when the cause is CPU — measured on this lab: CPU 1.00/1,
 	// Activity slots 6 of 20 busy, Workflow Task schedule-to-start 20s.
 	python := strings.HasPrefix(s.Workers[0].SDK, "python")
-	if (wfQ || actQ) && d.CPULimit > 0 && d.CPUCores >= 0.85*d.CPULimit && python {
+	if (wfQ || actQ) && d.TunerManaged {
+		// Measured (java-resource-based, target 60%): system CPU held at 0.586,
+		// the tuner granted 1-2 of 50 Activity slots, and schedule-to-start grew
+		// 8.7s -> 15.6s -> 23.6s. Working as designed — and not an autoscaler.
+		out = append(out, fmt.Sprintf("Resource-based tuner is holding Activity slots at %.0f (maximum %.0f) to keep system CPU at its %d%% target (reading %.0f%%, heap %.0f%%), "+
+			"and tasks are queueing (Activity schedule-to-start p95 %.1fs). The tuner caps resource use, not latency: the backlog grows until demand drops. "+
+			"Raise the CPU target, add Workers, or use MANUAL slots sized to cores. More slots or pollers change nothing here.",
+			d.ActSlotsUsed, d.ActSlotsTotal, s.Config.TargetCPUPct, 100*d.TunerCPU, 100*d.TunerMem, d.ActS2sP95))
+	} else if (wfQ || actQ) && d.CPULimit > 0 && d.CPUCores >= 0.85*d.CPULimit && python {
 		out = append(out, fmt.Sprintf("GIL-bound: the Worker is using %.2f cores — Python runs bytecode on one core at a time — and tasks are queueing "+
 			"(Workflow Task schedule-to-start p95 %.1fs, Activity %.1fs). CPU-bound Activities in threads also starve the event loop that runs Workflow code, "+
 			"so Workflow Tasks back up too. More slots add threads, not cores: run CPU-bound Activities in a ProcessPoolExecutor or a separate Worker process.",
@@ -912,7 +1009,27 @@ func diagnose(s *LaneSnapshot) []string {
 		}
 	}
 
-	if d.CacheHitRatio >= 0 && d.CacheHitRatio < 0.8 {
+	// Java only: the Workflow thread pool caps the sticky cache. Checked
+	// before the cache-ratio line because it is the CAUSE of that line, and
+	// "raise the cache size" is then exactly the wrong advice.
+	//
+	// The tell is the cache-size gauge pinned at maxWorkflowThreads-1, NOT the
+	// forced-eviction counter. Measured (java-thread-starved: cache 1000, 20
+	// threads, ~40 Workflows open): the cache held 19, misses ran at 10/s and
+	// hits at 7.4/s, while temporal_sticky_cache_thread_forced_eviction ran at
+	// only 0.4/s — alerting on evictions would understate it 25x.
+	java := strings.HasPrefix(s.Workers[0].SDK, "java")
+	threadCapped := java && s.Config.WorkflowThreads > 0 && s.Config.CacheSize >= s.Config.WorkflowThreads &&
+		// 0.8x, not exactly threads-1: the gauge read 18 as well as 19.
+		d.CacheSize >= 0.8*float64(s.Config.WorkflowThreads-1) && d.CacheHitRatio >= 0 && d.CacheHitRatio < 0.8
+	if threadCapped || (java && d.ThreadEvictPerSec > 0.05) {
+		out = append(out, fmt.Sprintf("Workflow threads cap the sticky cache: it holds %.0f Workflows of %d configured — one less than maxWorkflowThreads (%d), "+
+			"because each cached Workflow parks a thread — so %.0f%% of Workflow Tasks miss and replay (forced thread evictions %.1f/s). "+
+			"Slots are free and CPU is idle. Raise maxWorkflowThreads to at least the cache size (each thread is stack memory outside the heap) or lower the cache; a bigger cache alone does nothing.",
+			d.CacheSize, s.Config.CacheSize, s.Config.WorkflowThreads, 100*(1-max(d.CacheHitRatio, 0)), d.ThreadEvictPerSec))
+		threadCapped = true
+	}
+	if d.CacheHitRatio >= 0 && d.CacheHitRatio < 0.8 && d.ThreadEvictPerSec <= 0.05 {
 		out = append(out, fmt.Sprintf("Sticky cache hit ratio %.0f%%: most Workflow Tasks replay history from the start (replay p95 %.1fms). Raise the cache size, and the memory to hold it.",
 			100*d.CacheHitRatio, 1000*d.ReplayP95))
 	}

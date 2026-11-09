@@ -144,7 +144,9 @@ scrape_configs:
   - job_name: temporal-sdk-lab-worker
     metrics_path: /metrics
     dns_sd_configs:
-      - names: ["lab-worker-go"]
+      # Go and Java lab Workers; both serve SDK metrics on 9464. The Python
+      # one is not scraped (its SDK exports to one destination: the lab).
+      - names: ["lab-worker-go", "lab-worker-java"]
         type: A
         port: 9464
         refresh_interval: 10s

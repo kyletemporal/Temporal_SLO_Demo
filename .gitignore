@@ -18,6 +18,11 @@ __pycache__/
 /monitor/budget-derive
 /monitor/cmd/monitor/monitor
 /monitor/cmd/budget-derive/budget-derive
+/tools/k6protoset/k6protoset
+
+# Maven output from a local `mvn package` (the Dockerfile builds its own). CI's
+# hygiene job rejects committed binaries, and target/ is full of them.
+/demo/lab/javaworker/target/
 
 # OS
 .DS_Store
