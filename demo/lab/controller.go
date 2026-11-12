@@ -265,6 +265,10 @@ type LaneSnapshot struct {
 	Derived   Derived      `json:"derived"`
 	Server    ServerHealth `json:"server"`
 	Diagnosis []string     `json:"diagnosis"`
+	// Idle auto-pause (see autoPause). AutoPaused says why load stopped;
+	// PauseIn counts down while load runs untouched.
+	AutoPaused string  `json:"autoPaused,omitempty"`
+	PauseIn    float64 `json:"pauseInSeconds,omitempty"`
 }
 
 type Snapshot struct {
@@ -290,6 +294,10 @@ type laneState struct {
 	dropped atomic.Int64 // starts skipped because this lane's client was saturated
 	sem     chan struct{}
 	ds      *limiter
+	// Last time a person changed this lane (config, preset, burst), and why
+	// the controller paused it, if it did.
+	touchedAt  time.Time
+	autoPaused string
 }
 
 type controller struct {
@@ -307,6 +315,8 @@ type controller struct {
 
 	subsMu sync.Mutex
 	subs   map[chan []byte]struct{}
+
+	idlePause time.Duration // 0 disables the idle auto-pause
 }
 
 // labNamespace is the lab's own Temporal Namespace. NOT "default": the demo
@@ -332,6 +342,8 @@ func runController() {
 		prom:  env("PROMETHEUS_URL", "http://prometheus:9090"),
 		lanes: map[string]*laneState{},
 		subs:  map[chan []byte]struct{}{},
+		// LAB_IDLE_PAUSE_MIN=0 turns it off.
+		idlePause: time.Duration(envInt("LAB_IDLE_PAUSE_MIN", 30)) * time.Minute,
 	}
 	for _, l := range lanes {
 		cfg := baseline
@@ -342,7 +354,7 @@ func runController() {
 		ls := &laneState{
 			cfg: cfg, reports: map[string]WorkerReport{}, seenAt: map[string]time.Time{},
 			history: map[string][]counterPoint{}, ds: newLimiter(cfg.IOConcurrency),
-			sem: make(chan struct{}, maxConcurrentStarts),
+			sem: make(chan struct{}, maxConcurrentStarts), touchedAt: time.Now(),
 		}
 		ls.version = c.version.Add(1)
 		c.lanes[l] = ls
@@ -351,6 +363,11 @@ func runController() {
 	}
 	go c.snapshotLoop()
 	go c.healthLoop()
+	go func() {
+		for now := range time.Tick(15 * time.Second) {
+			c.autoPause(now)
+		}
+	}()
 
 	mux := http.NewServeMux()
 	ui, _ := fs.Sub(uiFS, "ui")
@@ -500,8 +517,41 @@ func (c *controller) setConfig(ls *laneState, cfg LaneConfig) {
 	ls.mu.Lock()
 	ls.cfg = cfg
 	ls.version = c.version.Add(1)
+	ls.touchedAt = time.Now()
+	ls.autoPaused = ""
 	ls.mu.Unlock()
 	ls.ds.setLimit(cfg.IOConcurrency)
+}
+
+// autoPause stops a lane's load once nobody has changed it for idlePause.
+//
+// The lab is an open-loop generator with no end time, and nothing stopped a
+// forgotten lane. Measured: the Java lane left at 60 starts/s × 300
+// Activities ran from Nov 10 to Nov 12, started 2.4M Workflows, grew Postgres
+// to 14.6 GB and filled Docker's disk. Postgres then died in WAL replay and
+// the lane spent 43 h counting 1.9M start errors against a dead server.
+//
+// Idle, not elapsed: every change restarts the clock, so a live demo that
+// keeps adjusting the lane is never cut off mid-step. Only Enabled flips;
+// every other setting is kept, so Start load resumes exactly where it was.
+func (c *controller) autoPause(now time.Time) (paused []string) {
+	if c.idlePause <= 0 {
+		return nil
+	}
+	for _, l := range lanes {
+		ls := c.lanes[l]
+		ls.mu.Lock()
+		if ls.cfg.Enabled && now.Sub(ls.touchedAt) >= c.idlePause {
+			ls.cfg.Enabled = false
+			ls.version = c.version.Add(1) // Workers see the change like any other
+			ls.autoPaused = fmt.Sprintf("load auto-paused at %s: no changes for %s (LAB_IDLE_PAUSE_MIN)",
+				now.Format("15:04"), c.idlePause)
+			paused = append(paused, l)
+			log.Printf("lane %s: %s", l, ls.autoPaused)
+		}
+		ls.mu.Unlock()
+	}
+	return paused
 }
 
 func (c *controller) handlePreset(w http.ResponseWriter, r *http.Request) {
@@ -563,6 +613,7 @@ func (c *controller) handleBurst(w http.ResponseWriter, r *http.Request) {
 	n = max(1, min(n, 2000))
 	ls.mu.Lock()
 	cfg := ls.cfg
+	ls.touchedAt = time.Now() // someone is using the lane: restart the idle clock
 	ls.mu.Unlock()
 	go func() {
 		for i := 0; i < n; i++ {
@@ -847,7 +898,11 @@ func rate(h []counterPoint, key string) float64 {
 func (c *controller) laneSnapshot(l string, ls *laneState) *LaneSnapshot {
 	now := time.Now()
 	ls.mu.Lock()
-	s := &LaneSnapshot{Lane: l, Version: ls.version, Config: ls.cfg, WF: ls.wf, Act: ls.act}
+	s := &LaneSnapshot{Lane: l, Version: ls.version, Config: ls.cfg, WF: ls.wf, Act: ls.act,
+		AutoPaused: ls.autoPaused}
+	if c.idlePause > 0 && ls.cfg.Enabled {
+		s.PauseIn = max(0, (c.idlePause - now.Sub(ls.touchedAt)).Seconds())
+	}
 	var d Derived
 	var hits, misses float64
 	for id, rep := range ls.reports {

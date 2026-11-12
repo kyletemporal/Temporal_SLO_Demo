@@ -240,6 +240,9 @@ services:
       TEMPORAL_ADDRESS: temporal:7233
       TEMPORAL_NAMESPACE: lab
       HTTP_PORT: "8095"
+      # Pause a lane's load after this many minutes with no changes; 0 = never.
+      # A forgotten 60/s lane once ran for two days and filled the disk.
+      LAB_IDLE_PAUSE_MIN: ${LAB_IDLE_PAUSE_MIN:-30}
     # Loopback only. The controller has no authentication and can start
     # thousands of Workflows; it must not be reachable from the LAN.
     ports:

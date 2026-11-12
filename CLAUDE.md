@@ -212,6 +212,10 @@ and never fires, or a number that looks like data and is not.
   1.24–1.29). A newer registry fails at startup with `NoSuchMethodError`.
 - **API keys before Java 1.28.1 need `temporal-namespace` set by hand.** So do
   raw gRPC clients like k6. Without it a valid key gets `PERMISSION_DENIED`.
+- **The lab's load generator never stops on its own.** A forgotten 60/s lane
+  filled Docker's disk in two days and Postgres died in WAL replay. Lanes now
+  auto-pause after `LAB_IDLE_PAUSE_MIN` (30) minutes untouched. Free space
+  with `docker builder prune`; it reclaimed 23 GB here without touching data.
 - **k6 init code runs once per VU.** A run id made there gave 4 VUs 4 ids, and
   the teardown counted 0 of 88 still running. Make per-run values in `setup()`.
 
