@@ -189,3 +189,56 @@ func TestMutatingGuard(t *testing.T) {
 		}
 	}
 }
+
+// The idle auto-pause exists because a forgotten lane filled the disk (see
+// autoPause). Pin the behaviour that makes it safe to leave on during demos.
+func TestAutoPauseIdleLanes(t *testing.T) {
+	t0 := time.Now()
+	newC := func(limit time.Duration) *controller {
+		c := &controller{lanes: map[string]*laneState{}, idlePause: limit}
+		for _, l := range lanes {
+			cfg := baseline
+			cfg.Enabled = l == "java" // only java is generating load
+			cfg.Rate = 60
+			c.lanes[l] = &laneState{cfg: cfg, touchedAt: t0, ds: newLimiter(cfg.IOConcurrency)}
+		}
+		return c
+	}
+
+	c := newC(30 * time.Minute)
+	if got := c.autoPause(t0.Add(29 * time.Minute)); len(got) != 0 {
+		t.Fatalf("paused before the limit: %v", got)
+	}
+	if s := c.laneSnapshot("java", c.lanes["java"]); s.PauseIn < 50 || s.PauseIn > 31*60 {
+		t.Fatalf("countdown not exposed: pauseInSeconds=%v", s.PauseIn)
+	}
+
+	got := c.autoPause(t0.Add(30 * time.Minute))
+	if len(got) != 1 || got[0] != "java" {
+		t.Fatalf("want only the running java lane paused, got %v", got)
+	}
+	js := c.lanes["java"]
+	if js.cfg.Enabled || js.cfg.Rate != 60 {
+		t.Fatalf("pause must flip Enabled only and keep settings: %+v", js.cfg)
+	}
+	s := c.laneSnapshot("java", js)
+	if !strings.Contains(s.AutoPaused, "auto-paused") || s.PauseIn != 0 {
+		t.Fatalf("snapshot must explain the pause: %q, pauseIn=%v", s.AutoPaused, s.PauseIn)
+	}
+
+	// A person resuming restarts the clock and clears the banner.
+	cfg := js.cfg
+	cfg.Enabled = true
+	c.setConfig(js, cfg)
+	if js.autoPaused != "" {
+		t.Fatalf("banner survived a resume: %q", js.autoPaused)
+	}
+	if got := c.autoPause(time.Now().Add(29 * time.Minute)); len(got) != 0 {
+		t.Fatalf("clock was not restarted by the change: %v", got)
+	}
+
+	// 0 disables it.
+	if got := newC(0).autoPause(t0.Add(1000 * time.Hour)); len(got) != 0 {
+		t.Fatalf("LAB_IDLE_PAUSE_MIN=0 must disable auto-pause, got %v", got)
+	}
+}

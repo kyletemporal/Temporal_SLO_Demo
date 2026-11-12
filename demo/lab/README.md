@@ -13,6 +13,16 @@ make lab-down
 
 The lab starts idle. Pick a preset, or press **Start load**, on either lane.
 
+**Load pauses itself after 30 minutes with no changes to the lane.** Any change
+(a control, a preset, a burst) restarts the clock, and the lane header counts
+down. Only the load stops: the lane keeps every setting, shows
+`auto-paused (idle)`, and resumes with **Start load**. Set
+`LAB_IDLE_PAUSE_MIN` (`0` disables it). The lab is an open-loop generator
+with no end time, and the first version had no limit. A Java lane left at 60
+starts/s × 300 Activities ran for two days: 2.4M Workflows, 14.6 GB in
+Postgres, then a full Docker disk. Postgres died in WAL replay, and the lane
+spent 43 h counting 1.9M start errors against a dead server.
+
 **It runs in its own Temporal Namespace, `lab`,** which the controller registers
 on startup. That is what keeps it out of the demo app's SLOs: the demo's
 application-tier SLIs (`worker_task_delivery`, `workflow_completion`) are

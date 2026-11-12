@@ -94,6 +94,7 @@
     <div class="lane-head">
       <h2 class="title"></h2>
       <span class="pill status"></span>
+      <span class="pill idle" hidden></span>
       <span class="grow"></span>
       <select class="preset"></select>
       <button class="burst" title="Start 50 Workflows at once">+50 burst</button>
@@ -120,6 +121,33 @@ const HIST = 300; // seconds of chart history
 const state = { snap: null, series: {}, presets: [], views: {} };
 const $ = (sel, el = document) => el.querySelector(sel);
 const fmt = (v, d = 1) => (v == null || isNaN(v)) ? "–" : Number(v).toFixed(d);
+// Counters run for days: 1914734 start errors on one line ran out of the
+// 170px client box and across the service box. Compact them, and keep exact
+// values in the tooltip.
+// Thresholds sit where toFixed(1) would round up into the next unit:
+// 999999999 printed "1000.0M" with plain 1e9/1e6 cut-offs.
+const fmtCount = (v) => v >= 999.95e6 ? (v / 1e9).toFixed(1) + "B" : v >= 999.95e3 ? (v / 1e6).toFixed(1) + "M"
+  : v >= 1e4 ? (v / 1e3).toFixed(1) + "k" : String(v);
+// Last line of defence for SVG text, which never wraps or clips: squeeze it
+// into maxW. Only kicks in when the text would otherwise overflow.
+function fitText(el, text, maxW) {
+  el.textContent = text;
+  el.removeAttribute("textLength");
+  el.removeAttribute("lengthAdjust");
+  try {
+    if (text && el.getComputedTextLength() > maxW) {
+      el.setAttribute("textLength", maxW);
+      el.setAttribute("lengthAdjust", "spacingAndGlyphs");
+    }
+  } catch (_) { /* not rendered yet (hidden lane): nothing to measure */ }
+}
+// Exact value on hover. Call AFTER fitText: setting textContent drops children.
+function tip(el, text) {
+  if (!el.textContent) return;
+  const t = document.createElementNS("http://www.w3.org/2000/svg", "title");
+  t.textContent = text;
+  el.appendChild(t);
+}
 const ms = s => s >= 1 ? fmt(s, 2) + "s" : fmt(s * 1000, 0) + "ms";
 
 // ---------------------------------------------------------------------------
@@ -317,6 +345,7 @@ function buildScene(v) {
     rateK: s("text", { x: X.load, y: 130, class: "muted", "font-size": 11 }, g, "Workflow starts / s"),
     started: s("text", { x: X.load, y: 180, "font-size": 13 }, g),
     errs: s("text", { x: X.load, y: 202, "font-size": 12, class: "muted" }, g),
+    dropped: s("text", { x: X.load, y: 220, "font-size": 12, class: "muted" }, g),
     shape: s("text", { x: X.load, y: 250, "font-size": 12, class: "muted" }, g),
   };
   for (const row of ["wf", "act"]) {
@@ -346,8 +375,16 @@ function drawPollers(gEl, configured, active, y, color) {
     if (active < 0) a["stroke-dasharray"] = "2 2";
     s("circle", a, gEl);
   }
-  if (active < 0) s("text", { x: X.poll, y: y + 46, "font-size": 10, class: "muted" }, gEl, `${configured} configured · not measured <1.30`);
-  else if (configured > 12) s("text", { x: X.poll, y: y + 46, "font-size": 10, class: "muted" }, gEl, `${configured} total`);
+  // The pollers column is only X.slots - X.poll (90px) wide. The note used to
+  // be one line, "2 configured · not measured <1.30", drawn straight across
+  // the slot caption beside it. Two short lines, squeezed if still too wide.
+  const colW = X.slots - X.poll - 8;
+  const note = (dy, text) => fitText(s("text", { x: X.poll, y: y + dy, "font-size": 10, class: "muted" }, gEl), text, colW);
+  if (active < 0) {
+    note(46, `${configured} configured`);
+    note(58, "not measured");
+    tip(gEl.lastChild, "Java SDK before 1.30 emits no num_pollers: this is the configured count, not polls in flight");
+  } else if (configured > 12) note(46, `${configured} total`);
 }
 
 function drawSlots(gEl, total, used, y, color) {
@@ -424,6 +461,18 @@ function render(snap) {
     else if (live.some(w => /FLAG REJECTED/.test(w.note || ""))) { st.textContent = `flag v${l.version} REJECTED · still running v${live[0].configVersion}`; st.className = "pill status warn"; }
     else if (live.some(w => !w.applied)) { st.textContent = `applying v${l.version}…`; st.className = "pill status warn"; }
     else { st.textContent = `${live[0].sdk} · lab-${lane} · v${l.version}`; st.className = "pill status ok"; }
+    // Idle auto-pause: a countdown while load runs untouched, and the reason
+    // once the controller has paused it (a forgotten lane filled the disk).
+    const ip = $(".idle", v.el);
+    if (l.autoPaused) {
+      ip.hidden = false; ip.className = "pill idle warn";
+      ip.textContent = "auto-paused (idle)";
+      ip.title = l.autoPaused + ". Settings are kept: press Start load to resume.";
+    } else if (c.enabled && l.pauseInSeconds > 0) {
+      ip.hidden = false; ip.className = "pill idle";
+      ip.textContent = `auto-pause in ${Math.ceil(l.pauseInSeconds / 60)}m`;
+      ip.title = "Load pauses after this long with no changes to the lane. Any change restarts the clock. LAB_IDLE_PAUSE_MIN=0 disables it.";
+    } else { ip.hidden = true; }
     const tg = $(".toggle", v.el);
     tg.textContent = c.enabled ? "Stop load" : "Start load";
     tg.className = "toggle " + (c.enabled ? "stop" : "primary");
@@ -439,10 +488,15 @@ function render(snap) {
 
     // Scene
     v.t.rate.textContent = c.enabled ? fmt(c.rate, 1) : "0";
-    v.t.started.textContent = `${l.started} started`;
-    v.t.errs.textContent = [l.startErrors ? `${l.startErrors} start errors` : "",
-      l.startsDropped ? `${l.startsDropped} dropped (client saturated)` : ""].filter(Boolean).join(" · ");
-    v.t.shape.textContent = `${c.phases} × ${c.activitiesPerPhase} Activities`;
+    // The client box is 170px wide starting at x=10; text starts at X.load.
+    const loadW = 180 - X.load - 8;
+    fitText(v.t.started, `${fmtCount(l.started)} started`, loadW);
+    fitText(v.t.errs, l.startErrors ? `${fmtCount(l.startErrors)} start errors` : "", loadW);
+    fitText(v.t.dropped, l.startsDropped ? `${fmtCount(l.startsDropped)} starts dropped` : "", loadW);
+    tip(v.t.started, `${l.started} Workflows started`);
+    tip(v.t.errs, `${l.startErrors} StartWorkflowExecution errors`);
+    tip(v.t.dropped, `${l.startsDropped} starts dropped: the load generator could not keep the configured rate (client saturated)`);
+    fitText(v.t.shape, `${c.phases} × ${c.activitiesPerPhase} Activities`, loadW);
     for (const [row, q, est] of [["wf", l.wf, d.WftQueueEst], ["act", l.act, d.ActQueueEst]]) {
       const w = Math.min(X.qw, X.qw * Math.log10(1 + est) / 3);
       v.t[row + "Fill"].setAttribute("x", X.queue + X.qw - w);
