@@ -62,7 +62,9 @@ for d in terraform/examples/*/ terraform/patterns/*/; do (cd $d && terraform val
 python3 tools/generate_visibility_rules.py --check   # drift check
 tests/promql/run.sh                 # promtool unit tests: alerts fire in the no-series cases
 cd demo/lab && go test ./...        # lab diagnosis pinned to measured cases
-docker build demo/lab/javaworker     # Java tuning flag: TuningFlagTest runs in the build
+docker build demo/lab/javaworker     # Java tuning flag: TuningFlagTest runs in the build (CI: mvn package)
+docker run --rm -v "$PWD/demo/k6/worker-tuning:/s" -w /s grafana/k6:0.55.0 inspect worker-tuning.js
+                                     # k6 script parses and the protoset loads (CI runs this)
 python3 tools/generate_worker_tuning_dashboard.py   # Workers — Tuning board (generated)
 cd aws/eks-selfhosted/terraform && terraform test    # mocked-provider plan checks
 git ls-files | while read -r f; do file --mime "$f" | grep -q charset=binary && echo "$f"; done
