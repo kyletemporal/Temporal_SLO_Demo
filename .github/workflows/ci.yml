@@ -136,6 +136,39 @@ jobs:
             exit 1
           fi
 
+  java:
+    name: Java (demo/lab/javaworker)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+          cache-dependency-path: demo/lab/javaworker/pom.xml
+      - name: mvn package (runs TuningFlagTest)
+        # TuningFlagTest pins the flag's validation rules, which ARE the
+        # landmine list (workflowThreads 0 rejected, ResourceBasedTuner refused
+        # on 1.29.0–1.32.x). Before this job only `docker build` ran them, and
+        # nothing ran that on a PR.
+        working-directory: demo/lab/javaworker
+        run: mvn -B -q package
+
+  k6:
+    name: k6 script (demo/k6/worker-tuning)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: k6 inspect
+        # Runs the init stage: parses the script and its imports AND loads the
+        # committed protoset. Verified: a truncated protoset fails here. It does
+        # not resolve RPC method names; those bind at invoke time, against a
+        # server. Same image tag as demo/docker-compose.yml.
+        run: |
+          docker run --rm -v "$PWD/demo/k6/worker-tuning:/s" -w /s \
+            grafana/k6:0.55.0 inspect worker-tuning.js > /dev/null
+
   shell:
     name: Shell syntax
     runs-on: ubuntu-latest
